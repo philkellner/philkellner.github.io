@@ -1,0 +1,48 @@
+/* Terminal CRT Theme CSS */
+
+body {
+    background-color: black;
+    color: #00FF00; /* Green phosphor text */
+    font-family: 'Courier New', Courier, monospace;
+    animation: retro-flicker 1.5s infinite;
+    overflow: hidden;
+}
+
+/* Create scanline effect */
+@keyframes scanlines {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 100%; }
+}
+
+.container {
+    position: relative;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.scanlines {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: repeating-linear-gradient(
+        rgba(255, 255, 255, 0.05) 0,
+        rgba(255, 255, 255, 0.05) 1px,
+        rgba(0, 0, 0, 0.5) 1px,
+        rgba(0, 0, 0, 0.5) 4px
+    );
+    animation: scanlines 0.5s linear infinite;
+}
+
+@keyframes retro-flicker {
+    0%   { opacity: 1; }
+    5%   { opacity: 0.9; }
+    10%  { opacity: 1; }
+    15%  { opacity: 0.9; }
+    20%  { opacity: 1; }
+    25%  { opacity: 0.9; }
+    100% { opacity: 1; }
+}
+
+/* Any additional elements would go here */
