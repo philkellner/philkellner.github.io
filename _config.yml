@@ -1,1 +1,4 @@
-theme: jekyll-theme-minimal
+# Jekyll configuration for terminal-style resume
+
+markdown: kramdown
+highlighter: rouge
