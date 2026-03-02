@@ -1,9 +1,0 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-	<id>http://cripsins.github.io/</id>
-	<title>My Blog</title>
-	<link rel="self" href="http://cripsins.github.io/" />
-	<rights>2019</rights>
-	<updated>2019-08-20T02:47:54Z</updated>
-	<subtitle>Welcome!</subtitle>
-</feed>
