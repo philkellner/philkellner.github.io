@@ -1,0 +1,31 @@
+"""Coaching cues for your most-used lifts: used for the AI video prompts, and reusable as in-app form tips.
+Review these yourself before relying on them; they are general technique cues, not individualised advice."""
+
+CUES = {
+    "Barbell Bench Press": "lie flat with eyes under the bar, shoulder blades pinched back and down, feet planted; lower the bar under control to the mid-chest with forearms vertical; press up and slightly back to straight arms; keep wrists stacked over elbows",
+    "Dumbbell Bench Press": "lie on a flat bench with dumbbells over the chest; lower with elbows about 45 degrees from the torso until the upper arms are level with the bench; press up to straight arms without clanging the weights; shoulder blades stay pinched",
+    "Barbell Incline Bench Press": "bench at about 30 degrees, shoulder blades pinched, feet planted; lower the bar to the upper chest under control; press back up to straight arms",
+    "Back Squat": "bar rests on the upper back, feet shoulder width and slightly turned out; brace the core, sit down and back keeping the chest up and knees tracking over the toes; descend to at least parallel, then drive up through the whole foot",
+    "Barbell Shoulder Press": "stand tall with the bar at the collarbones, glutes and core tight; press straight up, moving the head back then through under the bar; lock out overhead without leaning back; lower under control",
+    "Dumbbell Bicep Curl": "stand tall with elbows pinned to the sides; curl the dumbbells up rotating the palms to face the shoulders, no swinging; squeeze at the top and lower slowly to full extension",
+    "Barbell Curl": "stand tall, shoulder-width grip, elbows pinned to the sides; curl the bar to the shoulders without swinging the torso; lower slowly to full extension",
+    "Dumbbell Row": "one hand and knee on a bench, back flat and parallel to the floor; pull the dumbbell toward the hip leading with the elbow; squeeze the shoulder blade, lower to a full stretch without twisting",
+    "Dumbbell Upright Row": "stand tall holding dumbbells in front of the thighs; lift them along the body leading with the elbows to about chest height; keep elbows no higher than the shoulders; lower under control",
+    "Dumbbell Lateral Raise": "stand tall with a slight forward lean and a soft elbow bend; raise the dumbbells out to the sides to shoulder height leading with the elbows; pause, lower slowly, no swinging",
+    "Dumbbell Shrug": "stand tall with dumbbells at the sides, arms straight; lift the shoulders straight up toward the ears, pause, and lower slowly; do not roll the shoulders",
+    "Standing Barbell Calf Raise": "bar on the upper back, feet hip width, balls of the feet on a low step if available; rise as high as possible onto the toes, pause, lower to a deep stretch; knees stay nearly straight",
+    "Deadlift": "bar over mid-foot, hips hinged back and chest up, hands just outside the legs; brace the core, push the floor away keeping the bar against the legs; stand tall by driving the hips forward, then hinge back down under control with a flat back",
+    "Kettlebell Goblet Squat": "hold the kettlebell at the chest with elbows pointing down; feet shoulder width, sit between the hips keeping the chest tall; descend to at least parallel and stand back up",
+    "Leg Press": "back and hips flat against the pad, feet shoulder width on the platform; lower until the knees reach about 90 degrees without the hips lifting; press up without locking the knees out hard",
+    "Dumbbell Tricep Extension": "hold one dumbbell overhead with both hands, elbows pointing forward and close to the head; lower behind the head by bending only at the elbows; extend back up to straight arms",
+    "Lat Pulldown": "sit with thighs secured, grip slightly wider than the shoulders; lean back slightly, pull the bar to the upper chest driving the elbows down and back; control the bar back up to full arm extension",
+    "Assisted Dip": "grip the parallel bars, shoulders down, slight forward lean; lower until the upper arms are about parallel to the floor, elbows tracking back; press up to straight arms",
+    "Lying Hamstrings Curl": "lie face down with the pad just above the heels and hips pressed into the bench; curl the heels toward the glutes, squeeze, and lower slowly without the hips lifting",
+    "Cable Tricep Pushdown": "stand tall, elbows pinned to the sides, grip the rope or bar; push down to full elbow extension, squeeze, then return until the forearms are about parallel to the floor; no leaning or swinging",
+    "Leg Extension": "back against the pad, pad on the lower shin; extend the knees until the legs are almost straight, squeeze the quads, and lower slowly",
+    "Machine Row": "chest against the pad, sit tall; pull the handles back driving the elbows behind the body and squeezing the shoulder blades; return slowly to a full stretch",
+    "Arnold Dumbbell Press": "start with dumbbells at the chest, palms facing you; as you press up rotate the palms to face forward, finishing with straight arms overhead; reverse the rotation as you lower",
+    "Dumbbell Front Raise": "stand tall holding dumbbells in front of the thighs; raise them straight in front to shoulder height with a soft elbow bend; lower slowly, no swinging",
+    "Assisted Pull Up": "grip the bar just outside the shoulders, kneel on the assist pad; pull the chest toward the bar driving the elbows down; lower under control to a full hang",
+    "Plank": "forearms under the shoulders, body in one straight line from head to heels; squeeze glutes and abs, do not let the hips sag or pike; breathe steadily",
+}
