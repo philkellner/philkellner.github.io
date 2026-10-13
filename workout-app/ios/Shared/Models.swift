@@ -163,6 +163,26 @@ struct Alternative: Codable, Identifiable, Hashable {
     var id: String { exercise }
 }
 
+struct YouTubeLink: Codable, Identifiable, Hashable {
+    var title: String
+    var url: String
+    var channel: String
+    var views: Int
+    var id: String { url }
+}
+
+/// Reminder material for one exercise: written form cues first, then your video and YouTube links.
+struct ExerciseInfo: Codable, Hashable {
+    var exercise: String
+    var primary: [String]
+    var secondary: [String]
+    var equipment: String
+    var compound: Bool
+    var cues: [String]
+    var videoUrl: String?
+    var youtube: [YouTubeLink]
+}
+
 func parseISO(_ s: String) -> Date? { ISO8601DateFormatter().date(from: s) }
 
 func shortDate(_ iso: String) -> String {

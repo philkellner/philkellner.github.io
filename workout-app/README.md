@@ -10,7 +10,7 @@ export API_TOKEN=$(openssl rand -hex 24)      # keep this; the apps and bot send
 python seed.py ../../workout-coach/profile.json   # loads Chest & Triceps / Back & Biceps / Shoulders / Legs
 python import_history.py ~/Downloads/WorkoutExport.csv   # optional: your past workouts (safe to re-run)
 uvicorn app:app --host 0.0.0.0 --port 8000
-pytest                                          # 39 tests
+pytest                                          # 45 tests
 ```
 Deploy it anywhere with HTTPS (Fly.io, Railway, a VPS behind Caddy). Set `DB_PATH` to a persistent volume.
 
@@ -42,6 +42,13 @@ filtered by an equipment profile. `POST /equipment-profiles/derive` builds "From
 you've logged (`import_history.py` does this for you); the former is the default. Weights are your last estimated 1RM at ~2 reps
 in reserve (80-90% after a layoff); new exercises start at 0 with a note to find a light weight.
 Swaps: `GET /exercises/{name}/alternatives`, `POST /sessions/{id}/swap` (only before sets are logged for that exercise).
+
+## Exercise videos and form tips
+Each exercise has an info screen (the (i) button in a workout, or Progress > exercise > How to do it): written form steps first,
+your looping reminder clip if you have one, muscles worked and popular YouTube tutorials. The Watch shows the written steps
+under "Form tips". Server: `GET /exercises/{name}/info`, `POST /exercises/{name}/video` (mp4, 30 MB), `PUT .../links`;
+clips are served through signed, expiring links (`MEDIA_DIR` should be on a persistent volume). Cues live in `server/cues.py`
+(40 exercises so far). Making the clips: see `video/README.md`.
 
 ## Apple Health
 - **Watch:** starting or resuming a workout on the Watch starts an Apple Health strength-training session

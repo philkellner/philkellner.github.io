@@ -2,6 +2,7 @@
 
 Auth: every request needs `Authorization: Bearer $API_TOKEN`.
 """
+import json
 import os
 import random
 import sqlite3
@@ -10,15 +11,19 @@ from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+import cues
 import generator
 import library
+import media
 import progression
 import recovery as recovery_model
 
 DB_PATH = os.getenv("DB_PATH", "workouts.db")
+MEDIA_DIR = os.getenv("MEDIA_DIR", "media")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS templates (
@@ -40,6 +45,8 @@ CREATE TABLE IF NOT EXISTS session_sets (
   completed_at TEXT NOT NULL, is_warmup INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS equipment_profiles (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, equipment TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS exercise_media (
+  exercise TEXT PRIMARY KEY, video_file TEXT, youtube TEXT NOT NULL DEFAULT '[]');
 CREATE INDEX IF NOT EXISTS idx_sets_exercise ON session_sets(exercise);
 """
 
@@ -81,7 +88,9 @@ def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def require_token(authorization: str = Header(default="")):
+def require_token(request: Request, authorization: str = Header(default="")):
+    if request.url.path.startswith("/media/"):
+        return          # media links carry their own signature (see media.py)
     token = os.getenv("API_TOKEN")
     if not token:
         raise HTTPException(500, "API_TOKEN is not configured")
@@ -627,6 +636,72 @@ def save_health(sid: int, h: HealthIn):
         if fields:
             con.execute(f"UPDATE sessions SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?", (*fields.values(), sid))
         return session_out(con, con.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone())
+
+
+# ---------- exercise info, videos ----------
+def media_row(con, name):
+    return con.execute("SELECT * FROM exercise_media WHERE exercise=?", (name,)).fetchone()
+
+
+@app.get("/exercises/{name:path}/info")
+def exercise_info(name: str):
+    """Everything to remind you how to do an exercise: muscles, written form cues, your video and YouTube links."""
+    meta = library.describe(name)
+    with db() as con:
+        m = media_row(con, name)
+    video = media.signed_path(os.environ["API_TOKEN"], m["video_file"]) if m and m["video_file"] else None
+    return {"exercise": name, "primary": meta["primary"], "secondary": meta["secondary"],
+            "equipment": sorted(meta["equipment"])[0], "compound": meta["compound"], "cues": cues.cue_list(name),
+            "video_url": video, "youtube": json.loads(m["youtube"]) if m else []}
+
+
+class YouTubeLink(BaseModel):
+    title: str
+    url: str = Field(pattern=r"^https://(www\.)?youtube\.com/watch\?v=[\w-]+$|^https://youtu\.be/[\w-]+$")
+    channel: str = ""
+    views: int = 0
+
+
+class MediaIn(BaseModel):
+    youtube: list[YouTubeLink]
+
+
+@app.put("/exercises/{name:path}/links")
+def set_youtube_links(name: str, m: MediaIn):
+    with db() as con:
+        con.execute("INSERT INTO exercise_media (exercise, youtube) VALUES (?,?) "
+                    "ON CONFLICT(exercise) DO UPDATE SET youtube=excluded.youtube",
+                    (name, json.dumps([x.model_dump() for x in m.youtube])))
+    return exercise_info(name)
+
+
+@app.post("/exercises/{name:path}/video")
+async def upload_video(name: str, request: Request):
+    """Upload an mp4 clip (raw request body, Content-Type: video/mp4, up to 30 MB)."""
+    if request.headers.get("content-type", "").split(";")[0] != "video/mp4":
+        raise HTTPException(415, "send the clip as video/mp4")
+    body = await request.body()
+    if not body or len(body) > media.MAX_VIDEO_BYTES:
+        raise HTTPException(413, f"clip must be 1 byte to {media.MAX_VIDEO_BYTES // 2**20} MB")
+    filename = media.slug(name) + ".mp4"
+    os.makedirs(MEDIA_DIR, exist_ok=True)
+    with open(os.path.join(MEDIA_DIR, filename), "wb") as f:
+        f.write(body)
+    with db() as con:
+        con.execute("INSERT INTO exercise_media (exercise, video_file) VALUES (?,?) "
+                    "ON CONFLICT(exercise) DO UPDATE SET video_file=excluded.video_file", (name, filename))
+    return exercise_info(name)
+
+
+@app.get("/media/{filename}")
+def get_media(filename: str, exp: int = 0, sig: str = ""):
+    if not media.valid(os.environ.get("API_TOKEN", ""), filename, exp, sig):
+        raise HTTPException(403, "link expired or invalid")
+    try:
+        with open(os.path.join(MEDIA_DIR, filename), "rb") as f:
+            return Response(f.read(), media_type="video/mp4", headers={"Cache-Control": "private, max-age=3600"})
+    except FileNotFoundError:
+        raise HTTPException(404, "no such clip")
 
 
 @app.post("/sessions/{sid}/finish")

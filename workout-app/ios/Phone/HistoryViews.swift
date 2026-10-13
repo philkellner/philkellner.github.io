@@ -115,6 +115,7 @@ struct ExerciseProgress: View {
     var body: some View {
         List {
             if let error { Text(error).foregroundStyle(.red) }
+            Section { NavigationLink("How to do it") { ExerciseDetailView(exercise: exercise) } }
             if points.count > 1 {
                 Section("Estimated 1RM (\(Units.label))") {
                     Chart(points, id: \.date) { p in

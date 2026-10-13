@@ -8,6 +8,7 @@ struct SessionView: View {
     @State private var warmup = false
     @State private var restEnd: Date?
     @State private var error: String?
+    @State private var infoFor: String?
     @State private var swapFrom: String?
     @State private var alternatives: [Alternative] = []
 
@@ -44,6 +45,7 @@ struct SessionView: View {
                 } header: {
                     HStack {
                         Text(e.exercise)
+                        Button { infoFor = e.exercise } label: { Image(systemName: "info.circle") }
                         Spacer()
                         if session.finishedAt == nil && session.workingSets(of: e.exercise).isEmpty && session.completedSets.filter({ $0.exercise == e.exercise }).isEmpty {
                             Button { Task { await loadAlternatives(for: e.exercise) } } label: {
@@ -79,6 +81,9 @@ struct SessionView: View {
             }
         } message: {
             if alternatives.isEmpty { Text("No alternatives for your equipment.") }
+        }
+        .sheet(item: Binding(get: { infoFor.map(Identified.init) }, set: { infoFor = $0?.value })) { item in
+            NavigationStack { ExerciseDetailView(exercise: item.value).toolbar { Button("Done") { infoFor = nil } } }
         }
         .onAppear(perform: loadSuggestion)
         .onChange(of: key) { _, _ in loadSuggestion() }
@@ -140,4 +145,10 @@ struct SessionView: View {
         guard let c = APIConfig.load() else { return }
         do { session = try await call(APIClient(config: c)); error = nil } catch { self.error = error.localizedDescription }
     }
+}
+
+
+struct Identified: Identifiable {
+    let value: String
+    var id: String { value }
 }

@@ -41,8 +41,18 @@ def test_no_search_results():
 def test_every_cue_has_an_index_exercise_and_prompts_are_complete():
     idx = json.load(open(os.path.join(os.path.dirname(__file__), "exercise_index.json")))
     names = {r["exercise"] for r in idx}
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
     from cues import CUES
     assert set(CUES) <= names
     row = next(r for r in idx if r["exercise"] == "Back Squat")
     p = mp.prompt_for(row)
     assert "Back Squat" in p and "barbell" in p and "exactly 3 reps" in p
+
+
+def test_clips_are_matched_by_file_name(tmp_path):
+    import import_clips as ic
+    for n in ["back-squat.mp4", "Barbell_Bench_Press.MP4", "random.mp4", "notes.txt"]:
+        (tmp_path / n).write_bytes(b"x")
+    matched, unmatched = ic.match_clips(str(tmp_path), ["Back Squat", "Barbell Bench Press", "Deadlift"])
+    assert sorted(matched) == ["Back Squat", "Barbell Bench Press"] and unmatched == ["random.mp4"]
+    assert ic.shrink(str(tmp_path / "back-squat.mp4"))   # works with or without ffmpeg installed

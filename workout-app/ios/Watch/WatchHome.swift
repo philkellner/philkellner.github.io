@@ -111,6 +111,8 @@ struct WatchWorkoutView: View {
                         .digitalCrownRotation($weight, from: 0, through: 1500, by: Units.step,
                                               sensitivity: .low, isContinuous: false, isHapticFeedbackEnabled: true)
                     Text("Turn crown to change weight").font(.caption2).foregroundStyle(.secondary)
+                    NavigationLink("Form tips") { WatchFormTips(api: api, exercise: n.exercise.exercise) }
+                        .font(.footnote)
                     Button("Log set") { Task { await log(n.exercise, n.setIndex) } }.disabled(busy).tint(.green)
                 } else {
                     Text("All sets done").font(.headline)
@@ -163,5 +165,30 @@ struct WatchWorkoutView: View {
             RestAlert.cancel()
             onDone()
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+
+/// The written form steps for an exercise, as a quick reminder between sets.
+struct WatchFormTips: View {
+    let api: APIClient
+    let exercise: String
+    @State private var cues: [String] = []
+    @State private var loaded = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                if cues.isEmpty { Text(loaded ? "No tips for this exercise yet." : "Loading…").foregroundStyle(.secondary) }
+                ForEach(Array(cues.enumerated()), id: \.offset) { i, cue in
+                    Text("\(i + 1). " + cue.prefix(1).uppercased() + cue.dropFirst()).font(.footnote)
+                }
+            }
+        }
+        .navigationTitle(exercise)
+        .task {
+            cues = (try? await api.info(exercise: exercise).cues) ?? []
+            loaded = true
+        }
     }
 }

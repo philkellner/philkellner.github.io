@@ -96,6 +96,16 @@ struct APIClient {
         return try decode(WorkoutSession.self, try await request("POST", "/sessions/\(sessionId)/health", body: body))
     }
 
+    func info(exercise: String) async throws -> ExerciseInfo {
+        let name = exercise.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? exercise
+        return try decode(ExerciseInfo.self, try await request("GET", "/exercises/\(name)/info"))
+    }
+
+    /// Absolute URL for a server-relative path such as a signed video link.
+    func absoluteURL(_ path: String) -> URL? {
+        URL(string: config.baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path)
+    }
+
     func profiles() async throws -> [EquipmentProfile] {
         try decode([EquipmentProfile].self, try await request("GET", "/equipment-profiles"))
     }
