@@ -18,19 +18,25 @@ CREATE TABLE IF NOT EXISTS templates (
 CREATE TABLE IF NOT EXISTS template_exercises (
   id INTEGER PRIMARY KEY, template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
   position INTEGER NOT NULL, exercise TEXT NOT NULL, sets INTEGER NOT NULL, reps INTEGER NOT NULL,
-  weight_kg REAL NOT NULL DEFAULT 0);
+  weight_kg REAL NOT NULL DEFAULT 0, rest_seconds INTEGER NOT NULL DEFAULT 90);
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY, template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL,
   name TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, source TEXT NOT NULL DEFAULT 'api');
 CREATE TABLE IF NOT EXISTS session_exercises (
   id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   position INTEGER NOT NULL, exercise TEXT NOT NULL, sets INTEGER NOT NULL, reps INTEGER NOT NULL,
-  weight_kg REAL NOT NULL DEFAULT 0);
+  weight_kg REAL NOT NULL DEFAULT 0, rest_seconds INTEGER NOT NULL DEFAULT 90);
 CREATE TABLE IF NOT EXISTS session_sets (
   id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   exercise TEXT NOT NULL, set_index INTEGER NOT NULL, reps INTEGER NOT NULL, weight_kg REAL NOT NULL,
-  completed_at TEXT NOT NULL);
+  completed_at TEXT NOT NULL, is_warmup INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS idx_sets_exercise ON session_sets(exercise);
 """
+
+# columns added after the first release; applied to databases created by an older version
+MIGRATIONS = [("template_exercises", "rest_seconds", "INTEGER NOT NULL DEFAULT 90"),
+              ("session_exercises", "rest_seconds", "INTEGER NOT NULL DEFAULT 90"),
+              ("session_sets", "is_warmup", "INTEGER NOT NULL DEFAULT 0")]
 
 
 @contextmanager
@@ -48,6 +54,9 @@ def db():
 def init_db():
     with db() as con:
         con.executescript(SCHEMA)
+        for table, col, decl in MIGRATIONS:
+            if col not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
 
 def now():
@@ -70,6 +79,7 @@ class ExerciseIn(BaseModel):
     sets: int = Field(ge=1, le=20)
     reps: int = Field(ge=1, le=100)
     weight_kg: float = Field(default=0, ge=0)
+    rest_seconds: int = Field(default=90, ge=0, le=900)
 
 
 class TemplateIn(BaseModel):
@@ -82,6 +92,12 @@ class SetIn(BaseModel):
     set_index: int = Field(ge=1)
     reps: int = Field(ge=0)
     weight_kg: float = Field(ge=0)
+    is_warmup: bool = False
+
+
+class SetPatch(BaseModel):
+    reps: int | None = Field(default=None, ge=0)
+    weight_kg: float | None = Field(default=None, ge=0)
 
 
 class SessionStart(BaseModel):
@@ -90,25 +106,45 @@ class SessionStart(BaseModel):
 
 
 def template_out(con, row):
-    ex = con.execute("SELECT exercise,sets,reps,weight_kg FROM template_exercises WHERE template_id=? ORDER BY position",
+    ex = con.execute("SELECT exercise,sets,reps,weight_kg,rest_seconds FROM template_exercises WHERE template_id=? ORDER BY position",
                      (row["id"],)).fetchall()
     return {"id": row["id"], "name": row["name"], "exercises": [dict(e) for e in ex]}
 
 
+def e1rm(weight_kg, reps):
+    """Epley estimated one-rep max; only meaningful for loaded sets of up to 12 reps."""
+    return round(weight_kg * (1 + reps / 30), 1) if weight_kg > 0 and 0 < reps <= 12 else 0.0
+
+
+def last_performance(con, exercise, before=None):
+    """Working sets from the most recent earlier session that included this exercise (for prefilling)."""
+    row = con.execute("SELECT s.id, s.started_at FROM sessions s JOIN session_sets t ON t.session_id=s.id "
+                      "WHERE t.exercise=? AND t.is_warmup=0 AND s.id != COALESCE(?,-1) "
+                      "ORDER BY s.started_at DESC, s.id DESC LIMIT 1", (exercise, before)).fetchone()
+    if not row:
+        return None
+    sets = con.execute("SELECT reps,weight_kg FROM session_sets WHERE session_id=? AND exercise=? AND is_warmup=0 "
+                       "ORDER BY id", (row["id"], exercise)).fetchall()
+    return {"date": row["started_at"], "sets": [dict(x) for x in sets]}
+
+
 def session_out(con, row):
-    ex = con.execute("SELECT exercise,sets,reps,weight_kg FROM session_exercises WHERE session_id=? ORDER BY position",
-                     (row["id"],)).fetchall()
-    sets = con.execute("SELECT exercise,set_index,reps,weight_kg,completed_at FROM session_sets "
+    ex = [dict(e) for e in con.execute(
+        "SELECT exercise,sets,reps,weight_kg,rest_seconds FROM session_exercises WHERE session_id=? ORDER BY position",
+        (row["id"],))]
+    for e in ex:
+        e["last"] = last_performance(con, e["exercise"], row["id"])
+    sets = con.execute("SELECT id,exercise,set_index,reps,weight_kg,is_warmup,completed_at FROM session_sets "
                        "WHERE session_id=? ORDER BY id", (row["id"],)).fetchall()
     return {"id": row["id"], "template_id": row["template_id"], "name": row["name"], "started_at": row["started_at"],
-            "finished_at": row["finished_at"], "source": row["source"],
-            "exercises": [dict(e) for e in ex], "completed_sets": [dict(s) for s in sets]}
+            "finished_at": row["finished_at"], "source": row["source"], "exercises": ex,
+            "completed_sets": [dict(x, is_warmup=bool(x["is_warmup"])) for x in sets]}
 
 
 def write_exercises(con, table, key, key_id, exercises):
     for i, e in enumerate(exercises):
-        con.execute(f"INSERT INTO {table} ({key},position,exercise,sets,reps,weight_kg) VALUES (?,?,?,?,?,?)",
-                    (key_id, i, e.exercise, e.sets, e.reps, e.weight_kg))
+        con.execute(f"INSERT INTO {table} ({key},position,exercise,sets,reps,weight_kg,rest_seconds) "
+                    "VALUES (?,?,?,?,?,?,?)", (key_id, i, e.exercise, e.sets, e.reps, e.weight_kg, e.rest_seconds))
 
 
 @app.get("/templates")
@@ -153,8 +189,8 @@ def start_session(s: SessionStart):
         con.execute("UPDATE sessions SET finished_at=? WHERE finished_at IS NULL", (now(),))
         sid = con.execute("INSERT INTO sessions (template_id,name,started_at,source) VALUES (?,?,?,?)",
                           (t["id"], t["name"], now(), s.source)).lastrowid
-        con.execute("INSERT INTO session_exercises (session_id,position,exercise,sets,reps,weight_kg) "
-                    "SELECT ?,position,exercise,sets,reps,weight_kg FROM template_exercises WHERE template_id=?",
+        con.execute("INSERT INTO session_exercises (session_id,position,exercise,sets,reps,weight_kg,rest_seconds) "
+                    "SELECT ?,position,exercise,sets,reps,weight_kg,rest_seconds FROM template_exercises WHERE template_id=?",
                     (sid, t["id"]))
         return session_out(con, con.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone())
 
@@ -184,9 +220,60 @@ def log_set(sid: int, s: SetIn):
             raise HTTPException(404, "session not found")
         if row["finished_at"]:
             raise HTTPException(409, "session already finished")
-        con.execute("INSERT INTO session_sets (session_id,exercise,set_index,reps,weight_kg,completed_at) "
-                    "VALUES (?,?,?,?,?,?)", (sid, s.exercise, s.set_index, s.reps, s.weight_kg, now()))
+        con.execute("INSERT INTO session_sets (session_id,exercise,set_index,reps,weight_kg,completed_at,is_warmup) "
+                    "VALUES (?,?,?,?,?,?,?)", (sid, s.exercise, s.set_index, s.reps, s.weight_kg, now(), int(s.is_warmup)))
         return session_out(con, row)
+
+
+@app.patch("/sessions/{sid}/sets/{set_id}")
+def edit_set(sid: int, set_id: int, p: SetPatch):
+    with db() as con:
+        t = con.execute("SELECT * FROM session_sets WHERE id=? AND session_id=?", (set_id, sid)).fetchone()
+        if not t:
+            raise HTTPException(404, "set not found")
+        con.execute("UPDATE session_sets SET reps=?, weight_kg=? WHERE id=?",
+                    (t["reps"] if p.reps is None else p.reps, t["weight_kg"] if p.weight_kg is None else p.weight_kg, set_id))
+        return session_out(con, con.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone())
+
+
+@app.delete("/sessions/{sid}/sets/{set_id}")
+def delete_set(sid: int, set_id: int):
+    with db() as con:
+        if not con.execute("SELECT 1 FROM session_sets WHERE id=? AND session_id=?", (set_id, sid)).fetchone():
+            raise HTTPException(404, "set not found")
+        con.execute("DELETE FROM session_sets WHERE id=?", (set_id,))
+        return session_out(con, con.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone())
+
+
+@app.get("/exercises")
+def list_exercises():
+    """Every exercise you've logged working sets for, with session count and best estimated 1RM."""
+    with db() as con:
+        rows = con.execute("SELECT t.exercise, t.reps, t.weight_kg, s.id sid, s.started_at FROM session_sets t "
+                           "JOIN sessions s ON s.id=t.session_id WHERE t.is_warmup=0").fetchall()
+    agg = {}
+    for r in rows:
+        a = agg.setdefault(r["exercise"], {"exercise": r["exercise"], "sessions": set(), "best_e1rm_kg": 0.0, "last_date": ""})
+        a["sessions"].add(r["sid"])
+        a["best_e1rm_kg"] = max(a["best_e1rm_kg"], e1rm(r["weight_kg"], r["reps"]))
+        a["last_date"] = max(a["last_date"], r["started_at"])
+    out = [dict(a, sessions=len(a["sessions"])) for a in agg.values()]
+    return sorted(out, key=lambda a: (-a["sessions"], a["exercise"]))
+
+
+@app.get("/exercises/{name:path}/history")
+def exercise_history(name: str, limit: int = 30):
+    """Newest-first list of sessions for one exercise, with each session's sets and best estimated 1RM."""
+    with db() as con:
+        rows = con.execute("SELECT s.id sid, s.started_at, t.reps, t.weight_kg FROM session_sets t "
+                           "JOIN sessions s ON s.id=t.session_id WHERE t.exercise=? AND t.is_warmup=0 "
+                           "ORDER BY s.started_at DESC, s.id DESC, t.id", (name,)).fetchall()
+    sessions = {}
+    for r in rows:
+        s = sessions.setdefault(r["sid"], {"session_id": r["sid"], "date": r["started_at"], "sets": [], "best_e1rm_kg": 0.0})
+        s["sets"].append({"reps": r["reps"], "weight_kg": r["weight_kg"]})
+        s["best_e1rm_kg"] = max(s["best_e1rm_kg"], e1rm(r["weight_kg"], r["reps"]))
+    return list(sessions.values())[:min(limit, 200)]
 
 
 @app.post("/sessions/{sid}/finish")

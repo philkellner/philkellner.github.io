@@ -13,6 +13,7 @@ final class PhoneLink: NSObject, WCSessionDelegate, ObservableObject {
     }
 
     private func apply(_ ctx: [String: Any]) {
+        if let lb = ctx["useLb"] as? Bool { Units.useLb = lb }
         guard let url = ctx["baseURL"] as? String, let token = ctx["token"] as? String else { return }
         let c = APIConfig(baseURL: url, token: token)
         c.save()

@@ -72,9 +72,28 @@ struct APIClient {
                    body: ["template_id": templateId, "source": source]))
     }
 
-    func logSet(sessionId: Int, exercise: String, setIndex: Int, reps: Int, weightKg: Double) async throws -> WorkoutSession {
+    func logSet(sessionId: Int, exercise: String, setIndex: Int, reps: Int, weightKg: Double,
+                isWarmup: Bool = false) async throws -> WorkoutSession {
         try decode(WorkoutSession.self, try await request("POST", "/sessions/\(sessionId)/sets",
-                   body: ["exercise": exercise, "set_index": setIndex, "reps": reps, "weight_kg": weightKg]))
+                   body: ["exercise": exercise, "set_index": setIndex, "reps": reps, "weight_kg": weightKg,
+                          "is_warmup": isWarmup]))
+    }
+
+    func deleteSet(sessionId: Int, setId: Int) async throws -> WorkoutSession {
+        try decode(WorkoutSession.self, try await request("DELETE", "/sessions/\(sessionId)/sets/\(setId)"))
+    }
+
+    func sessions(limit: Int = 100) async throws -> [WorkoutSession] {
+        try decode([WorkoutSession].self, try await request("GET", "/sessions?limit=\(limit)"))
+    }
+
+    func exercises() async throws -> [ExerciseSummary] {
+        try decode([ExerciseSummary].self, try await request("GET", "/exercises"))
+    }
+
+    func history(exercise: String, limit: Int = 60) async throws -> [HistoryEntry] {
+        let name = exercise.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? exercise
+        return try decode([HistoryEntry].self, try await request("GET", "/exercises/\(name)/history?limit=\(limit)"))
     }
 
     func finish(sessionId: Int) async throws -> WorkoutSession {

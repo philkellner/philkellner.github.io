@@ -2,10 +2,28 @@ import SwiftUI
 
 struct RootView: View {
     @State private var config = APIConfig.load()
+    @State private var showSettings = false
+
+    var body: some View {
+        TabView {
+            WorkoutsTab(config: $config, showSettings: $showSettings)
+                .tabItem { Label("Workouts", systemImage: "dumbbell") }
+            HistoryTab()
+                .tabItem { Label("History", systemImage: "clock") }
+            ProgressTab()
+                .tabItem { Label("Progress", systemImage: "chart.line.uptrend.xyaxis") }
+        }
+        .sheet(isPresented: $showSettings) { SettingsView(config: $config) }
+        .onAppear { if config == nil { showSettings = true } }
+    }
+}
+
+struct WorkoutsTab: View {
+    @Binding var config: APIConfig?
+    @Binding var showSettings: Bool
     @State private var templates: [WorkoutTemplate] = []
     @State private var active: WorkoutSession?
     @State private var error: String?
-    @State private var showSettings = false
 
     var body: some View {
         NavigationStack {
@@ -23,15 +41,14 @@ struct RootView: View {
                 }
             }
             .navigationTitle("Workouts")
-            .toolbar { Button("Server") { showSettings = true } }
+            .toolbar { Button("Settings") { showSettings = true } }
             .refreshable { await load() }
-            .task { await load() }
-            .sheet(isPresented: $showSettings) { SettingsView(config: $config) { Task { await load() } } }
+            .task(id: config) { await load() }
         }
     }
 
     func load() async {
-        guard let config else { showSettings = true; return }
+        guard let config else { return }
         let api = APIClient(config: config)
         do {
             templates = try await api.templates()
@@ -43,24 +60,31 @@ struct RootView: View {
 
 struct SettingsView: View {
     @Binding var config: APIConfig?
-    var onSave: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var url = APIConfig.load()?.baseURL ?? ""
     @State private var token = APIConfig.load()?.token ?? ""
+    @State private var useLb = Units.useLb
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Server URL (https://…)", text: $url).textInputAutocapitalization(.never).autocorrectionDisabled()
-                SecureField("API token", text: $token)
+                Section("Server") {
+                    TextField("Server URL (https://…)", text: $url).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("API token", text: $token)
+                }
+                Section("Units") {
+                    Picker("Weight", selection: $useLb) { Text("lb").tag(true); Text("kg").tag(false) }
+                        .pickerStyle(.segmented)
+                }
             }
-            .navigationTitle("Server")
+            .navigationTitle("Settings")
             .toolbar {
                 Button("Save") {
+                    Units.useLb = useLb
                     let c = APIConfig(baseURL: url, token: token)
                     c.save(); config = c
                     WatchLink.shared.send(c)
-                    onSave(); dismiss()
+                    dismiss()
                 }
             }
         }
@@ -76,7 +100,7 @@ struct TemplateDetail: View {
     var body: some View {
         List {
             ForEach(template.exercises) { e in
-                HStack { Text(e.exercise); Spacer(); Text("\(e.sets)×\(e.reps) @ \(e.weightKg, specifier: "%.1f") kg").foregroundStyle(.secondary) }
+                HStack { Text(e.exercise); Spacer(); Text("\(e.sets)×\(e.reps) @ \(Units.text(e.weightKg))").foregroundStyle(.secondary) }
             }
             if let error { Text(error).foregroundStyle(.red) }
             Button("Start workout") {
@@ -91,35 +115,5 @@ struct TemplateDetail: View {
         }
         .navigationTitle(template.name)
         .navigationDestination(item: $started) { SessionView(session: $0) }
-    }
-}
-
-struct SessionView: View {
-    @State var session: WorkoutSession
-    @State private var error: String?
-
-    var body: some View {
-        List {
-            ForEach(session.exercises) { e in
-                let done = session.completedSets.filter { $0.exercise == e.exercise }.count
-                HStack { Text(e.exercise); Spacer(); Text("\(done)/\(e.sets) sets").foregroundStyle(done >= e.sets ? .green : .secondary) }
-            }
-            if let error { Text(error).foregroundStyle(.red) }
-            if let n = session.next, session.finishedAt == nil {
-                Button("Log set \(n.setIndex): \(n.exercise.exercise)") {
-                    Task { await run { try await $0.logSet(sessionId: session.id, exercise: n.exercise.exercise,
-                                                           setIndex: n.setIndex, reps: n.exercise.reps, weightKg: n.exercise.weightKg) } }
-                }
-            }
-            if session.finishedAt == nil {
-                Button("Finish workout", role: .destructive) { Task { await run { try await $0.finish(sessionId: session.id) } } }
-            }
-        }
-        .navigationTitle(session.name)
-    }
-
-    func run(_ call: (APIClient) async throws -> WorkoutSession) async {
-        guard let c = APIConfig.load() else { return }
-        do { session = try await call(APIClient(config: c)) } catch { self.error = error.localizedDescription }
     }
 }

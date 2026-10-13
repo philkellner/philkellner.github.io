@@ -13,7 +13,7 @@ final class WatchLink: NSObject, WCSessionDelegate {
 
     func send(_ config: APIConfig) {
         guard WCSession.default.activationState == .activated else { return }
-        try? WCSession.default.updateApplicationContext(["baseURL": config.baseURL, "token": config.token])
+        try? WCSession.default.updateApplicationContext(["baseURL": config.baseURL, "token": config.token, "useLb": Units.useLb])
     }
 
     func session(_ s: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
