@@ -29,10 +29,11 @@ final class PhoneLink: NSObject, WCSessionDelegate, ObservableObject {
 @main
 struct WorkoutWatchApp: App {
     @StateObject private var link = PhoneLink()
+    @StateObject private var recorder = WorkoutRecorder()
     var body: some Scene {
         WindowGroup {
             Group {
-                if let config = link.config { WatchHome(api: APIClient(config: config)) }
+                if let config = link.config { WatchHome(api: APIClient(config: config)).environmentObject(recorder) }
                 else { Text("Open the Workout app on your iPhone and save the server settings.").padding() }
             }
             .onAppear { link.activate() }

@@ -87,6 +87,15 @@ struct APIClient {
         try decode([WorkoutSession].self, try await request("GET", "/sessions?limit=\(limit)"))
     }
 
+    func saveHealth(sessionId: Int, summary: WorkoutSummary) async throws -> WorkoutSession {
+        var body: [String: Any] = ["duration_seconds": summary.durationSeconds]
+        if let v = summary.avgHeartRate { body["avg_heart_rate"] = v }
+        if let v = summary.maxHeartRate { body["max_heart_rate"] = v }
+        if let v = summary.activeCalories { body["active_calories"] = v }
+        if let v = summary.healthkitUUID { body["healthkit_uuid"] = v }
+        return try decode(WorkoutSession.self, try await request("POST", "/sessions/\(sessionId)/health", body: body))
+    }
+
     func profiles() async throws -> [EquipmentProfile] {
         try decode([EquipmentProfile].self, try await request("GET", "/equipment-profiles"))
     }

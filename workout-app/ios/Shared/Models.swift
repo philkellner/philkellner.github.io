@@ -67,6 +67,24 @@ struct CompletedSet: Codable, Identifiable, Hashable {
     var completedAt: String
 }
 
+/// Health data attached to a workout by the server.
+struct HealthSummary: Codable, Hashable {
+    var avgHeartRate: Double?
+    var maxHeartRate: Double?
+    var activeCalories: Double?
+    var durationSeconds: Int?
+    var healthkitUuid: String?
+}
+
+/// What the Watch measured during a workout; sent to the server when the workout ends.
+struct WorkoutSummary {
+    var avgHeartRate: Double?
+    var maxHeartRate: Double?
+    var activeCalories: Double?
+    var durationSeconds: Int
+    var healthkitUUID: String?
+}
+
 struct WorkoutSession: Codable, Identifiable, Hashable {
     var id: Int
     var templateId: Int?
@@ -74,6 +92,7 @@ struct WorkoutSession: Codable, Identifiable, Hashable {
     var startedAt: String
     var finishedAt: String?
     var source: String
+    var health: HealthSummary?
     var exercises: [ExerciseSpec]
     var completedSets: [CompletedSet]
 

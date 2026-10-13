@@ -4,6 +4,7 @@ import WatchKit
 struct WatchHome: View {
     let api: APIClient
     @Environment(\.scenePhase) private var phase
+    @EnvironmentObject private var recorder: WorkoutRecorder
     @State private var templates: [WorkoutTemplate] = []
     @State private var active: WorkoutSession?
     @State private var path: [WorkoutSession] = []
@@ -36,6 +37,8 @@ struct WatchHome: View {
             templates = try await api.templates()
             active = try await api.activeSession()
             error = nil
+            // The workout was finished or replaced elsewhere (phone, Discord): stop the Health session so it doesn't run on.
+            if recorder.isRunning, active?.id != recorder.recordingFor { await recorder.discard() }
         } catch { self.error = error.localizedDescription }
     }
 
@@ -61,6 +64,7 @@ struct WatchWorkoutView: View {
     let api: APIClient
     @State var session: WorkoutSession
     var onDone: () -> Void
+    @EnvironmentObject private var recorder: WorkoutRecorder
     @State private var reps = 0
     @State private var weight = 0.0          // display units (lb or kg); set with the Digital Crown
     @State private var restEnd: Date?
@@ -75,6 +79,14 @@ struct WatchWorkoutView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 6) {
+                if recorder.isRunning {
+                    HStack(spacing: 10) {
+                        Label(recorder.heartRate > 0 ? "\(Int(recorder.heartRate))" : "--", systemImage: "heart.fill")
+                            .foregroundStyle(.red)
+                        Label("\(Int(recorder.activeCalories))", systemImage: "flame.fill").foregroundStyle(.orange)
+                    }
+                    .font(.footnote)
+                }
                 if let restEnd {
                     Text("Rest").font(.caption).foregroundStyle(.secondary)
                     RestCountdown(endDate: restEnd) { endRest(haptic: true) }
@@ -104,10 +116,14 @@ struct WatchWorkoutView: View {
                     Text("All sets done").font(.headline)
                     Button("Finish") { Task { await finish() } }.disabled(busy).tint(.green)
                 }
+                if session.next != nil && restEnd == nil {
+                    Button("End workout", role: .destructive) { Task { await finish() } }.disabled(busy).font(.footnote)
+                }
                 if let error { Text(error).font(.footnote).foregroundStyle(.red) }
             }
         }
         .navigationTitle(session.name)
+        .task { await recorder.start(sessionId: session.id) }
         .onAppear(perform: loadSuggestion)
         .onChange(of: key) { _, _ in loadSuggestion() }
     }
@@ -140,6 +156,12 @@ struct WatchWorkoutView: View {
 
     func finish() async {
         busy = true; defer { busy = false }
-        do { _ = try await api.finish(sessionId: session.id); onDone() } catch { self.error = error.localizedDescription }
+        let summary = await recorder.end()    // saves the workout to Apple Health
+        do {
+            _ = try await api.finish(sessionId: session.id)
+            if let summary { _ = try? await api.saveHealth(sessionId: session.id, summary: summary) }
+            RestAlert.cancel()
+            onDone()
+        } catch { self.error = error.localizedDescription }
     }
 }

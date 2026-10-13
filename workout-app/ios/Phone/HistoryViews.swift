@@ -15,7 +15,8 @@ struct HistoryTab: View {
                     } label: {
                         VStack(alignment: .leading) {
                             Text(s.name)
-                            Text("\(shortDate(s.startedAt)) · \(s.completedSets.filter { !$0.isWarmup }.count) sets")
+                            Text("\(shortDate(s.startedAt)) · \(s.completedSets.filter { !$0.isWarmup }.count) sets"
+                                 + (s.health?.avgHeartRate.map { " · ♥ \(Int($0))" } ?? ""))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -39,6 +40,15 @@ struct SessionDetail: View {
 
     var body: some View {
         List {
+            if let h = session.health {
+                Section("Health") {
+                    if let avg = h.avgHeartRate {
+                        LabeledContent("Heart rate", value: "avg \(Int(avg))" + (h.maxHeartRate.map { ", max \(Int($0))" } ?? "") + " bpm")
+                    }
+                    if let kcal = h.activeCalories { LabeledContent("Active energy", value: "\(Int(kcal)) kcal") }
+                    if let d = h.durationSeconds { LabeledContent("Duration", value: "\(d / 60) min") }
+                }
+            }
             ForEach(session.exercises) { e in
                 let sets = session.completedSets.filter { $0.exercise == e.exercise && !$0.isWarmup }
                 if !sets.isEmpty {

@@ -20,8 +20,15 @@ targets:
       properties:
         CFBundleDisplayName: Workout
         UILaunchScreen: {}
+        NSHealthShareUsageDescription: Reads your workouts from Apple Health.
+        NSHealthUpdateUsageDescription: Saves your strength workouts to Apple Health.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true   # lets you test against http://<mac-ip>:8000; use https in production
+    entitlements:
+      path: Phone/Workout.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.example.workout
   WorkoutWatch:
@@ -34,7 +41,15 @@ targets:
         CFBundleDisplayName: Workout
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.example.workout
+        WKBackgroundModes: [workout-processing]   # lets the workout session keep running between sets
+        NSHealthShareUsageDescription: Shows your heart rate and calories during workouts.
+        NSHealthUpdateUsageDescription: Saves your strength workouts to Apple Health.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+    entitlements:
+      path: Watch/WorkoutWatch.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.example.workout.watchkitapp

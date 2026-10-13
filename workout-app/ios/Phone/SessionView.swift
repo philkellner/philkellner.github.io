@@ -64,7 +64,10 @@ struct SessionView: View {
             if let error { Text(error).foregroundStyle(.red) }
             if session.finishedAt == nil {
                 Button(session.next == nil ? "Finish workout" : "Finish early", role: session.next == nil ? nil : .destructive) {
-                    Task { await run { try await $0.finish(sessionId: session.id) } }
+                    Task {
+                        await run { try await $0.finish(sessionId: session.id) }
+                        if session.finishedAt != nil { await PhoneHealth.saveIfNeeded(session) }
+                    }
                 }
             }
         }

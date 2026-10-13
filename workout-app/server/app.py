@@ -47,7 +47,10 @@ CREATE INDEX IF NOT EXISTS idx_sets_exercise ON session_sets(exercise);
 MIGRATIONS = [("template_exercises", "rest_seconds", "INTEGER NOT NULL DEFAULT 90"),
               ("session_exercises", "rest_seconds", "INTEGER NOT NULL DEFAULT 90"),
               ("session_sets", "is_warmup", "INTEGER NOT NULL DEFAULT 0"),
-              ("sessions", "custom", "INTEGER NOT NULL DEFAULT 0")]
+              ("sessions", "custom", "INTEGER NOT NULL DEFAULT 0"),
+              ("sessions", "avg_heart_rate", "REAL"), ("sessions", "max_heart_rate", "REAL"),
+              ("sessions", "active_calories", "REAL"), ("sessions", "duration_seconds", "INTEGER"),
+              ("sessions", "healthkit_uuid", "TEXT")]
 
 
 @contextmanager
@@ -181,8 +184,10 @@ def session_out(con, row):
         e["suggestion"] = suggestion_for(con, e["exercise"], row["id"]) if live and not row["custom"] else None
     sets = con.execute("SELECT id,exercise,set_index,reps,weight_kg,is_warmup,completed_at FROM session_sets "
                        "WHERE session_id=? ORDER BY id", (row["id"],)).fetchall()
+    health = {k: row[k] for k in ("avg_heart_rate", "max_heart_rate", "active_calories", "duration_seconds", "healthkit_uuid")}
     return {"id": row["id"], "template_id": row["template_id"], "name": row["name"], "started_at": row["started_at"],
             "finished_at": row["finished_at"], "source": row["source"], "exercises": ex,
+            "health": health if any(v is not None for v in health.values()) else None,
             "completed_sets": [dict(x, is_warmup=bool(x["is_warmup"])) for x in sets]}
 
 
@@ -602,6 +607,26 @@ def swap_exercise(sid: int, s: SwapIn):
             weight = generator.weight_for(match["e1rm"], cur["reps"], match["days_since"])
         con.execute("UPDATE session_exercises SET exercise=?, weight_kg=? WHERE id=?", (s.replacement, weight, cur["id"]))
         return session_out(con, row)
+
+
+class HealthIn(BaseModel):
+    avg_heart_rate: float | None = Field(default=None, ge=20, le=260)
+    max_heart_rate: float | None = Field(default=None, ge=20, le=260)
+    active_calories: float | None = Field(default=None, ge=0, le=10000)
+    duration_seconds: int | None = Field(default=None, ge=0, le=86400)
+    healthkit_uuid: str | None = None
+
+
+@app.post("/sessions/{sid}/health")
+def save_health(sid: int, h: HealthIn):
+    """Attach the Apple Health summary (from the Watch) to a workout. Only the fields you send are changed."""
+    fields = h.model_dump(exclude_none=True)
+    with db() as con:
+        if not con.execute("SELECT 1 FROM sessions WHERE id=?", (sid,)).fetchone():
+            raise HTTPException(404, "session not found")
+        if fields:
+            con.execute(f"UPDATE sessions SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?", (*fields.values(), sid))
+        return session_out(con, con.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone())
 
 
 @app.post("/sessions/{sid}/finish")

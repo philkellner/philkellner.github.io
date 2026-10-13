@@ -108,3 +108,19 @@ def test_import_history_is_idempotent(tmp_path):
     assert sess["name"] == "Chest & Triceps" and len(sess["completed_sets"]) == 3  # cardio row ignored
     assert [s["is_warmup"] for s in sess["completed_sets"]] == [True, False, False]
     assert c.get("/sessions/active", headers=H).status_code in (200, 404)  # imported sessions are never "active"
+
+
+def test_health_summary_is_stored_merged_and_validated():
+    s = _start_legs()
+    assert s["health"] is None
+    out = c.post(f"/sessions/{s['id']}/health", headers=H,
+                 json={"avg_heart_rate": 118.5, "max_heart_rate": 162, "active_calories": 240.4}).json()
+    assert out["health"]["avg_heart_rate"] == 118.5 and out["health"]["healthkit_uuid"] is None
+    out = c.post(f"/sessions/{s['id']}/health", headers=H, json={"duration_seconds": 3100, "healthkit_uuid": "ABC"}).json()
+    assert out["health"]["avg_heart_rate"] == 118.5 and out["health"]["duration_seconds"] == 3100   # earlier fields kept
+    c.post(f"/sessions/{s['id']}/finish", headers=H)
+    assert c.post(f"/sessions/{s['id']}/health", headers=H, json={"active_calories": 250}).json()["health"]["active_calories"] == 250
+    assert c.post(f"/sessions/{s['id']}/health", headers=H, json={"avg_heart_rate": 5}).status_code == 422
+    assert c.post("/sessions/99999/health", headers=H, json={"active_calories": 1}).status_code == 404
+    listed = [x for x in c.get("/sessions?limit=50", headers=H).json() if x["id"] == s["id"]][0]
+    assert listed["health"]["max_heart_rate"] == 162
