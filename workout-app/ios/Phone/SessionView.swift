@@ -42,8 +42,11 @@ struct SessionView: View {
                 } header: {
                     Text(e.exercise)
                 } footer: {
-                    if let last = e.last {
-                        Text("Last (\(shortDate(last.date))): " + last.sets.map { "\($0.reps)×\(Units.text($0.weightKg))" }.joined(separator: ", "))
+                    VStack(alignment: .leading) {
+                        if let sug = e.suggestion { Text("Suggested: \(sug.reps) × \(Units.text(sug.weightKg)). \(sug.reason)") }
+                        if let last = e.last {
+                            Text("Last (\(shortDate(last.date))): " + last.sets.map { "\($0.reps)×\(Units.text($0.weightKg))" }.joined(separator: ", "))
+                        }
                     }
                 }
             }
@@ -70,9 +73,9 @@ struct SessionView: View {
 
     func loadSuggestion() {
         guard let n = session.next else { return }
-        let s = n.exercise.suggestion(forSet: n.setIndex)
+        let s = n.exercise.prefill(forSet: n.setIndex)
         reps = s.reps
-        weight = Units.display(s.weightKg)
+        weight = Units.snapped(s.weightKg)
     }
 
     func log(_ e: ExerciseSpec, _ setIndex: Int) async {

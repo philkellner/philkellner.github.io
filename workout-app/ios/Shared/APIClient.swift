@@ -87,6 +87,14 @@ struct APIClient {
         try decode([WorkoutSession].self, try await request("GET", "/sessions?limit=\(limit)"))
     }
 
+    func recovery() async throws -> [MuscleRecovery] {
+        try decode([MuscleRecovery].self, try await request("GET", "/recovery"))
+    }
+
+    func recommendation() async throws -> [TemplateReadiness] {
+        try decode([TemplateReadiness].self, try await request("GET", "/recommendation"))
+    }
+
     func exercises() async throws -> [ExerciseSummary] {
         try decode([ExerciseSummary].self, try await request("GET", "/exercises"))
     }

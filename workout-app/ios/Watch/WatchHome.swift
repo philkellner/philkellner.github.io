@@ -72,6 +72,9 @@ struct WatchWorkoutView: View {
                 } else if let n = session.next {
                     Text(n.exercise.exercise).font(.headline).multilineTextAlignment(.center)
                     Text("Set \(n.setIndex) of \(n.exercise.sets)").font(.footnote).foregroundStyle(.secondary)
+                    if let why = n.exercise.suggestion?.reason {
+                        Text(why).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    }
                     HStack {
                         Button { reps = max(0, reps - 1) } label: { Image(systemName: "minus") }
                         Text("\(reps) reps").frame(minWidth: 60)
@@ -98,9 +101,9 @@ struct WatchWorkoutView: View {
 
     func loadSuggestion() {
         guard let n = session.next else { return }
-        let s = n.exercise.suggestion(forSet: n.setIndex)
+        let s = n.exercise.prefill(forSet: n.setIndex)
         reps = s.reps
-        weight = Units.display(s.weightKg)
+        weight = Units.snapped(s.weightKg)
     }
 
     func log(_ e: ExerciseSpec, _ idx: Int) async {

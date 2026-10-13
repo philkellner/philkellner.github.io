@@ -4,11 +4,15 @@ Auth: every request needs `Authorization: Bearer $API_TOKEN`.
 """
 import os
 import sqlite3
+import statistics
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
+
+import progression
+import recovery as recovery_model
 
 DB_PATH = os.getenv("DB_PATH", "workouts.db")
 
@@ -125,7 +129,35 @@ def last_performance(con, exercise, before=None):
         return None
     sets = con.execute("SELECT reps,weight_kg FROM session_sets WHERE session_id=? AND exercise=? AND is_warmup=0 "
                        "ORDER BY id", (row["id"], exercise)).fetchall()
-    return {"date": row["started_at"], "sets": [dict(x) for x in sets]}
+    return {"date": row["started_at"], "sets": [dict(x) for x in sets], "session_id": row["id"]}
+
+
+def parse_ts(s):
+    return datetime.fromisoformat(s).astimezone(timezone.utc)
+
+
+def suggestion_for(con, exercise, before=None, as_of=None):
+    """Next-session weight/reps for an exercise from its logged history, or None for a new exercise."""
+    rows = con.execute("SELECT s.id, s.started_at, s.source FROM sessions s WHERE s.id != COALESCE(?,-1) AND EXISTS "
+                       "(SELECT 1 FROM session_sets t WHERE t.session_id=s.id AND t.exercise=? AND t.is_warmup=0) "
+                       "ORDER BY s.started_at DESC, s.id DESC LIMIT 4", (before, exercise)).fetchall()
+    sessions = []
+    for r in rows:
+        sets = con.execute("SELECT reps,weight_kg FROM session_sets WHERE session_id=? AND exercise=? AND is_warmup=0 "
+                           "ORDER BY id", (r["id"], exercise)).fetchall()
+        sessions.append({"id": r["id"], "source": r["source"], "date": parse_ts(r["started_at"]), "sets": [dict(x) for x in sets]})
+    if not sessions:
+        return None
+    plan = con.execute("SELECT sets,reps FROM session_exercises WHERE session_id=? AND exercise=?",
+                       (sessions[0]["id"], exercise)).fetchone()
+    goal_sets = plan["sets"] if plan else len(sessions[0]["sets"])
+    if plan and sessions[0]["source"] != "import":
+        goal_reps = plan["reps"]  # a deliberate target from a template-driven workout
+    else:
+        # imported history has no plan: use your typical reps over recent sessions, not one good or bad day
+        typical = sorted(statistics.median(x["reps"] for x in s["sets"]) for s in sessions)
+        goal_reps = max(1, round(typical[len(typical) // 2]))
+    return progression.suggest(exercise, sessions, goal_sets, goal_reps, as_of or datetime.now(timezone.utc))
 
 
 def session_out(con, row):
@@ -133,7 +165,9 @@ def session_out(con, row):
         "SELECT exercise,sets,reps,weight_kg,rest_seconds FROM session_exercises WHERE session_id=? ORDER BY position",
         (row["id"],))]
     for e in ex:
-        e["last"] = last_performance(con, e["exercise"], row["id"])
+        live = row["finished_at"] is None
+        e["last"] = last_performance(con, e["exercise"], row["id"]) if live else None
+        e["suggestion"] = suggestion_for(con, e["exercise"], row["id"]) if live else None
     sets = con.execute("SELECT id,exercise,set_index,reps,weight_kg,is_warmup,completed_at FROM session_sets "
                        "WHERE session_id=? ORDER BY id", (row["id"],)).fetchall()
     return {"id": row["id"], "template_id": row["template_id"], "name": row["name"], "started_at": row["started_at"],
@@ -192,6 +226,10 @@ def start_session(s: SessionStart):
         con.execute("INSERT INTO session_exercises (session_id,position,exercise,sets,reps,weight_kg,rest_seconds) "
                     "SELECT ?,position,exercise,sets,reps,weight_kg,rest_seconds FROM template_exercises WHERE template_id=?",
                     (sid, t["id"]))
+        for e in con.execute("SELECT id, exercise FROM session_exercises WHERE session_id=?", (sid,)).fetchall():
+            sug = suggestion_for(con, e["exercise"], sid)
+            if sug:
+                con.execute("UPDATE session_exercises SET weight_kg=?, reps=? WHERE id=?", (sug["weight_kg"], sug["reps"], e["id"]))
         return session_out(con, con.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone())
 
 
@@ -274,6 +312,57 @@ def exercise_history(name: str, limit: int = 30):
         s["sets"].append({"reps": r["reps"], "weight_kg": r["weight_kg"]})
         s["best_e1rm_kg"] = max(s["best_e1rm_kg"], e1rm(r["weight_kg"], r["reps"]))
     return list(sessions.values())[:min(limit, 200)]
+
+
+@app.get("/exercises/{name:path}/suggestion")
+def exercise_suggestion(name: str):
+    """What to lift next time for this exercise, with the reason."""
+    with db() as con:
+        sug = suggestion_for(con, name)
+    if not sug:
+        raise HTTPException(404, "no history for this exercise")
+    return sug
+
+
+def recovery_rows(con, as_of):
+    since = (as_of - timedelta(days=10)).isoformat(timespec="seconds")
+    rows = con.execute("SELECT session_id, exercise, completed_at FROM session_sets WHERE is_warmup=0 AND completed_at>=? "
+                       "ORDER BY id", (since,)).fetchall()
+    by_session = {}
+    for r in rows:
+        s = by_session.setdefault(r["session_id"], {"end": parse_ts(r["completed_at"]), "exercises": []})
+        s["end"] = max(s["end"], parse_ts(r["completed_at"]))
+        s["exercises"].append(r["exercise"])
+    return recovery_model.recovery(list(by_session.values()), as_of)
+
+
+def parse_as_of(as_of):
+    try:
+        return parse_ts(as_of) if as_of else datetime.now(timezone.utc)
+    except ValueError:
+        raise HTTPException(422, "as_of must be an ISO timestamp")
+
+
+@app.get("/recovery")
+def get_recovery(as_of: str | None = None):
+    """Recovery per muscle, most fatigued first. `as_of` (ISO timestamp) asks "what will it look like then?"."""
+    with db() as con:
+        return recovery_rows(con, parse_as_of(as_of))
+
+
+@app.get("/recommendation")
+def get_recommendation(as_of: str | None = None):
+    """Your templates ranked by how recovered the muscles they work are."""
+    with db() as con:
+        rec = recovery_rows(con, parse_as_of(as_of))
+        out = []
+        for t in con.execute("SELECT * FROM templates ORDER BY position,id").fetchall():
+            ex = [dict(e) for e in con.execute("SELECT exercise,sets FROM template_exercises WHERE template_id=?", (t["id"],))]
+            out.append({"template_id": t["id"], "name": t["name"], **recovery_model.template_readiness(ex, rec)})
+    out.sort(key=lambda r: -r["readiness"])
+    for i, r in enumerate(out):
+        r["recommended"] = i == 0
+    return out
 
 
 @app.post("/sessions/{sid}/finish")

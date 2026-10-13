@@ -10,6 +10,8 @@ struct RootView: View {
                 .tabItem { Label("Workouts", systemImage: "dumbbell") }
             HistoryTab()
                 .tabItem { Label("History", systemImage: "clock") }
+            RecoveryTab()
+                .tabItem { Label("Recovery", systemImage: "heart.text.square") }
             ProgressTab()
                 .tabItem { Label("Progress", systemImage: "chart.line.uptrend.xyaxis") }
         }
@@ -23,12 +25,27 @@ struct WorkoutsTab: View {
     @Binding var showSettings: Bool
     @State private var templates: [WorkoutTemplate] = []
     @State private var active: WorkoutSession?
+    @State private var readiness: [TemplateReadiness] = []
     @State private var error: String?
 
     var body: some View {
         NavigationStack {
             List {
                 if let error { Text(error).foregroundStyle(.red) }
+                if let pick = readiness.first(where: { $0.recommended }),
+                   let template = templates.first(where: { $0.id == pick.templateId }) {
+                    Section("Suggested today") {
+                        NavigationLink {
+                            TemplateDetail(template: template) { s in active = s }
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text(pick.name).font(.headline)
+                                Text("\(pick.readiness)% recovered" + (pick.limitingMuscle.map { " · least recovered: \($0)" } ?? ""))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
                 if let active {
                     Section("In progress") {
                         NavigationLink("\(active.name) (started on \(active.source))") { SessionView(session: active) }
@@ -36,7 +53,17 @@ struct WorkoutsTab: View {
                 }
                 Section("Workouts") {
                     ForEach(templates) { t in
-                        NavigationLink(t.name) { TemplateDetail(template: t) { s in active = s } }
+                        NavigationLink {
+                            TemplateDetail(template: t) { s in active = s }
+                        } label: {
+                            HStack {
+                                Text(t.name)
+                                Spacer()
+                                if let r = readiness.first(where: { $0.templateId == t.id }) {
+                                    Text("\(r.readiness)%").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -53,6 +80,7 @@ struct WorkoutsTab: View {
         do {
             templates = try await api.templates()
             active = try await api.activeSession()
+            readiness = (try? await api.recommendation()) ?? []
             error = nil
         } catch { self.error = error.localizedDescription }
     }

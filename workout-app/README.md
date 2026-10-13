@@ -10,7 +10,7 @@ export API_TOKEN=$(openssl rand -hex 24)      # keep this; the apps and bot send
 python seed.py ../../workout-coach/profile.json   # loads Chest & Triceps / Back & Biceps / Shoulders / Legs
 python import_history.py ~/Downloads/WorkoutExport.csv   # optional: your past workouts (safe to re-run)
 uvicorn app:app --host 0.0.0.0 --port 8000
-pytest                                          # 9 tests
+pytest                                          # 25 tests
 ```
 Deploy it anywhere with HTTPS (Fly.io, Railway, a VPS behind Caddy). Set `DB_PATH` to a persistent volume.
 
@@ -30,5 +30,10 @@ whenever the app becomes active).
 
 ## Status
 Server is tested. The Swift code has **not been compiled** (written without Xcode); expect to fix small build errors on first build.
-Not yet: HealthKit/heart rate, progressive-overload suggestions, recovery tracking, workout generation, swaps.
+Progression: when you start a workout, each exercise's weight/reps come from your history (hit all target reps: add weight;
+miss: repeat; miss twice: deload ~10%; 4+ weeks off: restart at 90%, 8+ weeks at 80%), with the reason shown. A brand-new
+exercise keeps the template's numbers; `GET /exercises/{name}/suggestion` shows the current suggestion.
+Recovery: `GET /recovery` (per-muscle %) and `GET /recommendation` (templates ranked by readiness) use `muscles.py`
+(exercise to muscle map) and `recovery.py` (fatigue model); both take `?as_of=<ISO time>` to look ahead.
+Not yet: HealthKit/heart rate, workout generation, swaps.
 Units: server stores kg; phone Settings switches display between lb and kg (default lb) and syncs to the Watch.

@@ -10,6 +10,29 @@ struct LastPerformance: Codable, Hashable {
     var sets: [SetResult]
 }
 
+struct Suggestion: Codable, Hashable {
+    var weightKg: Double
+    var reps: Int
+    var reason: String
+}
+
+struct MuscleRecovery: Codable, Identifiable, Hashable {
+    var muscle: String
+    var recoveryPct: Int
+    var status: String        // ready / recovering / fatigued
+    var lastTrained: String?
+    var id: String { muscle }
+}
+
+struct TemplateReadiness: Codable, Identifiable, Hashable {
+    var templateId: Int
+    var name: String
+    var readiness: Int
+    var limitingMuscle: String?
+    var recommended: Bool
+    var id: Int { templateId }
+}
+
 struct ExerciseSpec: Codable, Identifiable, Hashable {
     var exercise: String
     var sets: Int
@@ -17,10 +40,12 @@ struct ExerciseSpec: Codable, Identifiable, Hashable {
     var weightKg: Double
     var restSeconds: Int
     var last: LastPerformance?
+    var suggestion: Suggestion?
     var id: String { exercise }
 
-    /// What to prefill for a given 1-based set: what you did last time for that set, else the plan.
-    func suggestion(forSet index: Int) -> SetResult {
+    /// What to prefill for a given 1-based set: the progression suggestion, else what you did last time, else the plan.
+    func prefill(forSet index: Int) -> SetResult {
+        if let s = suggestion { return SetResult(reps: s.reps, weightKg: s.weightKg) }
         if let l = last?.sets, !l.isEmpty { return l[min(index, l.count) - 1] }
         return SetResult(reps: reps, weightKg: weightKg)
     }
@@ -104,6 +129,11 @@ enum Units {
     static func display(_ kg: Double) -> Double {
         let v = useLb ? kg * 2.20462 : kg
         return (v * 2).rounded() / 2
+    }
+    /// Display value snapped to the nearest loadable step (5 lb or 2.5 kg), for suggested weights.
+    static func snapped(_ kg: Double) -> Double {
+        let raw = useLb ? kg * 2.20462 : kg
+        return (raw / step).rounded() * step
     }
     static func toKg(_ value: Double) -> Double {
         let kg = useLb ? value / 2.20462 : value
