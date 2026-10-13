@@ -3,14 +3,18 @@
 Auth: every request needs `Authorization: Bearer $API_TOKEN`.
 """
 import os
+import random
 import sqlite3
 import statistics
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+import generator
+import library
 import progression
 import recovery as recovery_model
 
@@ -34,13 +38,16 @@ CREATE TABLE IF NOT EXISTS session_sets (
   id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   exercise TEXT NOT NULL, set_index INTEGER NOT NULL, reps INTEGER NOT NULL, weight_kg REAL NOT NULL,
   completed_at TEXT NOT NULL, is_warmup INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS equipment_profiles (
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, equipment TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_sets_exercise ON session_sets(exercise);
 """
 
 # columns added after the first release; applied to databases created by an older version
 MIGRATIONS = [("template_exercises", "rest_seconds", "INTEGER NOT NULL DEFAULT 90"),
               ("session_exercises", "rest_seconds", "INTEGER NOT NULL DEFAULT 90"),
-              ("session_sets", "is_warmup", "INTEGER NOT NULL DEFAULT 0")]
+              ("session_sets", "is_warmup", "INTEGER NOT NULL DEFAULT 0"),
+              ("sessions", "custom", "INTEGER NOT NULL DEFAULT 0")]
 
 
 @contextmanager
@@ -61,6 +68,10 @@ def init_db():
         for table, col, decl in MIGRATIONS:
             if col not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
                 con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        if not con.execute("SELECT 1 FROM equipment_profiles").fetchone():
+            for name, eq in [("Full gym", library.ALL_EQUIPMENT), ("Dumbbells only", ["dumbbell", "bodyweight"]),
+                             ("Bodyweight & bands", ["bodyweight", "band"])]:
+                con.execute("INSERT INTO equipment_profiles (name,equipment) VALUES (?,?)", (name, ",".join(eq)))
 
 
 def now():
@@ -167,7 +178,7 @@ def session_out(con, row):
     for e in ex:
         live = row["finished_at"] is None
         e["last"] = last_performance(con, e["exercise"], row["id"]) if live else None
-        e["suggestion"] = suggestion_for(con, e["exercise"], row["id"]) if live else None
+        e["suggestion"] = suggestion_for(con, e["exercise"], row["id"]) if live and not row["custom"] else None
     sets = con.execute("SELECT id,exercise,set_index,reps,weight_kg,is_warmup,completed_at FROM session_sets "
                        "WHERE session_id=? ORDER BY id", (row["id"],)).fetchall()
     return {"id": row["id"], "template_id": row["template_id"], "name": row["name"], "started_at": row["started_at"],
@@ -350,19 +361,247 @@ def get_recovery(as_of: str | None = None):
         return recovery_rows(con, parse_as_of(as_of))
 
 
+def get_recommendation_rows(con, rec):
+    out = []
+    for t in con.execute("SELECT * FROM templates ORDER BY position,id").fetchall():
+        ex = [dict(e) for e in con.execute("SELECT exercise,sets FROM template_exercises WHERE template_id=?", (t["id"],))]
+        out.append({"template_id": t["id"], "name": t["name"], **recovery_model.template_readiness(ex, rec)})
+    return out
+
+
 @app.get("/recommendation")
 def get_recommendation(as_of: str | None = None):
     """Your templates ranked by how recovered the muscles they work are."""
     with db() as con:
-        rec = recovery_rows(con, parse_as_of(as_of))
-        out = []
-        for t in con.execute("SELECT * FROM templates ORDER BY position,id").fetchall():
-            ex = [dict(e) for e in con.execute("SELECT exercise,sets FROM template_exercises WHERE template_id=?", (t["id"],))]
-            out.append({"template_id": t["id"], "name": t["name"], **recovery_model.template_readiness(ex, rec)})
+        out = get_recommendation_rows(con, recovery_rows(con, parse_as_of(as_of)))
     out.sort(key=lambda r: -r["readiness"])
     for i, r in enumerate(out):
         r["recommended"] = i == 0
     return out
+
+
+# ---------- equipment profiles ----------
+class ProfileIn(BaseModel):
+    name: str = Field(min_length=1)
+    equipment: list[str]
+
+
+def profile_out(r):
+    return {"id": r["id"], "name": r["name"], "equipment": r["equipment"].split(",") if r["equipment"] else []}
+
+
+def check_equipment(eq):
+    bad = [e for e in eq if e not in library.ALL_EQUIPMENT]
+    if bad:
+        raise HTTPException(422, f"unknown equipment {bad}; choose from {library.ALL_EQUIPMENT}")
+
+
+def derive_profiles(con):
+    """Create/refresh profiles from the equipment your logs show you actually use."""
+    rows = con.execute("SELECT exercise, COUNT(DISTINCT session_id) n, MAX(completed_at) last FROM session_sets "
+                       "WHERE is_warmup=0 GROUP BY exercise").fetchall()
+    if not rows:
+        return []
+    cutoff = (parse_ts(max(r["last"] for r in rows)) - timedelta(days=365)).isoformat(timespec="seconds")
+    recent_rows = con.execute("SELECT exercise, COUNT(DISTINCT session_id) n FROM session_sets WHERE is_warmup=0 "
+                              "AND completed_at>=? GROUP BY exercise", (cutoff,)).fetchall()
+    def tags(rs):
+        use = Counter()
+        for r in rs:
+            use[next(iter(library.equipment_for(r["exercise"])))] += r["n"]
+        return sorted({t for t, n in use.items() if n >= 3} | {"bodyweight"})
+    out = []
+    for name, eq in [("From my history", tags(rows)), ("Recent training", tags(recent_rows))]:
+        con.execute("INSERT INTO equipment_profiles (name,equipment) VALUES (?,?) "
+                    "ON CONFLICT(name) DO UPDATE SET equipment=excluded.equipment", (name, ",".join(eq)))
+        out.append(name)
+    return out
+
+
+@app.get("/equipment-profiles")
+def list_profiles():
+    with db() as con:
+        return [profile_out(r) for r in con.execute("SELECT * FROM equipment_profiles ORDER BY id")]
+
+
+@app.post("/equipment-profiles", status_code=201)
+def create_profile(p: ProfileIn):
+    check_equipment(p.equipment)
+    with db() as con:
+        try:
+            pid = con.execute("INSERT INTO equipment_profiles (name,equipment) VALUES (?,?)",
+                              (p.name, ",".join(p.equipment))).lastrowid
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "a profile with that name exists")
+        return profile_out(con.execute("SELECT * FROM equipment_profiles WHERE id=?", (pid,)).fetchone())
+
+
+@app.put("/equipment-profiles/{pid}")
+def update_profile(pid: int, p: ProfileIn):
+    check_equipment(p.equipment)
+    with db() as con:
+        if not con.execute("UPDATE equipment_profiles SET name=?, equipment=? WHERE id=?",
+                           (p.name, ",".join(p.equipment), pid)).rowcount:
+            raise HTTPException(404, "profile not found")
+        return profile_out(con.execute("SELECT * FROM equipment_profiles WHERE id=?", (pid,)).fetchone())
+
+
+@app.delete("/equipment-profiles/{pid}", status_code=204)
+def delete_profile(pid: int):
+    with db() as con:
+        con.execute("DELETE FROM equipment_profiles WHERE id=?", (pid,))
+
+
+@app.post("/equipment-profiles/derive")
+def derive_profiles_endpoint():
+    """Build "From my history" and "Recent training" profiles from the equipment you've logged."""
+    with db() as con:
+        names = derive_profiles(con)
+        return [profile_out(r) for r in con.execute("SELECT * FROM equipment_profiles ORDER BY id") if r["name"] in names]
+
+
+def get_profile(con, name):
+    """Named profile, else "From my history", else "Full gym"."""
+    for n in ([name] if name else []) + ["From my history", "Full gym"]:
+        r = con.execute("SELECT * FROM equipment_profiles WHERE name=?", (n,)).fetchone()
+        if r:
+            return profile_out(r)
+        if name and n == name:
+            raise HTTPException(404, f"no equipment profile named {name!r}")
+
+
+# ---------- generator, swaps, custom sessions ----------
+def build_pool(con, as_of):
+    """Every exercise worth offering: ones you've done at least twice, plus the built-in library."""
+    stats = {}
+    for r in con.execute("SELECT t.exercise, t.reps, t.weight_kg, s.id sid, s.started_at FROM session_sets t "
+                         "JOIN sessions s ON s.id=t.session_id WHERE t.is_warmup=0"):
+        sessions = stats.setdefault(r["exercise"], {})
+        d = sessions.setdefault(r["sid"], {"date": r["started_at"], "e1rm": 0.0})
+        d["e1rm"] = max(d["e1rm"], e1rm(r["weight_kg"], r["reps"]))
+    pool = []
+    for name in set(stats) | set(library.builtin_exercises()):
+        meta = library.describe(name)
+        sessions = stats.get(name, {})
+        if not meta["primary"] or (len(sessions) < 2 and name not in library.builtin_exercises()):
+            continue
+        last = max(sessions.values(), key=lambda d: d["date"]) if sessions else None
+        pool.append(dict(meta, count=len(sessions), e1rm=(last["e1rm"] or None) if last else None,
+                         days_since=(as_of - parse_ts(last["date"])).days if last else 0))
+    return sorted(pool, key=lambda c: c["exercise"])   # stable order so a seed reproduces the same workout
+
+
+class GenerateIn(BaseModel):
+    minutes: int = Field(default=45, ge=15, le=120)
+    goal: str = "hypertrophy"
+    profile: str | None = None            # equipment profile name; default: From my history
+    template: str | None = None           # train the muscles of this template day
+    muscles: list[str] | None = None      # or name muscles directly
+    variety: float = Field(default=0.2, ge=0, le=1)   # 0 = stick to what you know, 1 = adventurous
+    exclude: list[str] = []
+    seed: int | None = None
+
+
+@app.post("/generate")
+def generate_workout(g: GenerateIn):
+    """Draft a workout from recovery, equipment, time and goal. Nothing is saved until you start it."""
+    if g.goal not in generator.GOALS:
+        raise HTTPException(422, f"goal must be one of {list(generator.GOALS)}")
+    as_of = datetime.now(timezone.utc)
+    with db() as con:
+        profile = get_profile(con, g.profile)
+        rec = recovery_rows(con, as_of)
+        pct = {r["muscle"]: r["recovery_pct"] for r in rec}
+        if g.muscles:
+            bad = [m for m in g.muscles if m not in pct]
+            if bad:
+                raise HTTPException(422, f"unknown muscles {bad}")
+            targets, label = {m: 1.0 for m in g.muscles}, ", ".join(g.muscles)
+        else:
+            templates = {t["name"]: t for t in con.execute("SELECT * FROM templates")}
+            if g.template:
+                t = templates.get(g.template)
+                if not t:
+                    raise HTTPException(404, f"no template named {g.template!r}")
+            else:
+                ready = {x["name"]: x["readiness"] for x in (get_recommendation_rows(con, rec))}
+                if not ready:
+                    raise HTTPException(409, "no templates to base the workout on; pass `muscles`")
+                t = templates[max(ready, key=ready.get)]
+            ex = [dict(e) for e in con.execute("SELECT exercise,sets FROM template_exercises WHERE template_id=?", (t["id"],))]
+            targets, label = recovery_model.template_loads(ex), t["name"]
+            if not g.template:   # automatic pick: leave out muscles that are still sore
+                fresh = {m: v for m, v in targets.items() if pct[m] >= 50}
+                targets = fresh or targets
+        pool = build_pool(con, as_of)
+    rng = random.Random(g.seed if g.seed is not None else as_of.toordinal())
+    plan = generator.generate(pool, targets, set(profile["equipment"]), g.minutes, g.goal, g.variety, rng, set(g.exclude))
+    if not plan:
+        raise HTTPException(409, "no exercises fit; try more time or a bigger equipment profile")
+    return {"name": f"{label} ({g.goal})", "goal": g.goal, "minutes": g.minutes,
+            "estimated_minutes": generator.estimated_minutes(plan), "equipment_profile": profile["name"],
+            "targets": {m: pct[m] for m in sorted(targets, key=lambda m: -targets[m])}, "exercises": plan}
+
+
+class CustomSession(BaseModel):
+    name: str = Field(min_length=1)
+    exercises: list[ExerciseIn] = Field(min_length=1)
+    source: str = "api"
+
+
+@app.post("/sessions/custom", status_code=201)
+def start_custom_session(c: CustomSession):
+    """Start a workout from an explicit exercise list (e.g. a generated draft). The plan is used as given."""
+    with db() as con:
+        con.execute("UPDATE sessions SET finished_at=? WHERE finished_at IS NULL", (now(),))
+        sid = con.execute("INSERT INTO sessions (template_id,name,started_at,source,custom) VALUES (NULL,?,?,?,1)",
+                          (c.name, now(), c.source)).lastrowid
+        write_exercises(con, "session_exercises", "session_id", sid, c.exercises)
+        return session_out(con, con.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone())
+
+
+@app.get("/exercises/{name:path}/alternatives")
+def exercise_alternatives(name: str, profile: str | None = None):
+    """Swap candidates: same main muscles, equipment you have, most familiar first."""
+    with db() as con:
+        eq = set(get_profile(con, profile)["equipment"])
+        pool = build_pool(con, datetime.now(timezone.utc))
+    me = library.describe(name)
+    out = [c for c in pool if c["exercise"] != name and c["equipment"] <= eq and set(c["primary"]) & set(me["primary"])]
+    out.sort(key=lambda c: (c["compound"] != me["compound"], -len(set(c["primary"]) & set(me["primary"])), -c["count"], c["exercise"]))
+    return [{"exercise": c["exercise"], "equipment": sorted(c["equipment"]), "sessions": c["count"]} for c in out[:8]]
+
+
+class SwapIn(BaseModel):
+    exercise: str
+    replacement: str
+
+
+@app.post("/sessions/{sid}/swap")
+def swap_exercise(sid: int, s: SwapIn):
+    """Replace an exercise in a live workout (before any set of it is logged), with a weight from your history."""
+    with db() as con:
+        row = con.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "session not found")
+        if row["finished_at"]:
+            raise HTTPException(409, "session already finished")
+        cur = con.execute("SELECT * FROM session_exercises WHERE session_id=? AND exercise=?", (sid, s.exercise)).fetchone()
+        if not cur:
+            raise HTTPException(404, "exercise not in this session")
+        if con.execute("SELECT 1 FROM session_exercises WHERE session_id=? AND exercise=?", (sid, s.replacement)).fetchone():
+            raise HTTPException(409, "replacement is already in this session")
+        if con.execute("SELECT 1 FROM session_sets WHERE session_id=? AND exercise=?", (sid, s.exercise)).fetchone():
+            raise HTTPException(409, "sets already logged for this exercise")
+        if not library.describe(s.replacement)["primary"] and s.replacement not in {r["exercise"] for r in con.execute(
+                "SELECT DISTINCT exercise FROM session_sets")}:
+            raise HTTPException(422, "unknown exercise")
+        match = next((c for c in build_pool(con, datetime.now(timezone.utc)) if c["exercise"] == s.replacement), None)
+        weight = 0.0
+        if match and match["e1rm"] and match["equipment"] != {"bodyweight"}:
+            weight = generator.weight_for(match["e1rm"], cur["reps"], match["days_since"])
+        con.execute("UPDATE session_exercises SET exercise=?, weight_kg=? WHERE id=?", (s.replacement, weight, cur["id"]))
+        return session_out(con, row)
 
 
 @app.post("/sessions/{sid}/finish")

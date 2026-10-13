@@ -8,6 +8,7 @@ struct WatchHome: View {
     @State private var active: WorkoutSession?
     @State private var path: [WorkoutSession] = []
     @State private var error: String?
+    @State private var generating = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -20,6 +21,8 @@ struct WatchHome: View {
                 ForEach(templates) { t in
                     Button(t.name) { Task { await start(t) } }
                 }
+                Button(generating ? "Generating…" : "Generate workout") { Task { await generate() } }
+                    .disabled(generating).tint(.blue)
             }
             .navigationTitle("Workouts")
             .navigationDestination(for: WorkoutSession.self) { WatchWorkoutView(api: api, session: $0, onDone: { active = nil; path = [] }) }
@@ -33,6 +36,16 @@ struct WatchHome: View {
             templates = try await api.templates()
             active = try await api.activeSession()
             error = nil
+        } catch { self.error = error.localizedDescription }
+    }
+
+    /// Builds a workout from what's recovered and your equipment, then starts it.
+    func generate() async {
+        generating = true; defer { generating = false }
+        do {
+            let draft = try await api.generate()
+            let s = try await api.startCustom(draft, source: "watch")
+            active = s; path = [s]; error = nil
         } catch { self.error = error.localizedDescription }
     }
 

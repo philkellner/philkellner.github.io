@@ -54,9 +54,8 @@ def recovery(sessions, now: datetime):
     return sorted(rows, key=lambda r: r["recovery_pct"])
 
 
-def template_readiness(template_exercises, recovery_rows):
-    """How ready you are for a template: recovery of the muscles it loads, weighted by planned sets."""
-    pct = {r["muscle"]: r["recovery_pct"] for r in recovery_rows}
+def template_loads(template_exercises):
+    """Planned sets per muscle for a template ({"exercise", "sets"} rows)."""
     load = {}
     for e in template_exercises:
         primary, secondary = muscles_for(e["exercise"])
@@ -64,6 +63,13 @@ def template_readiness(template_exercises, recovery_rows):
             load[m] = load.get(m, 0) + e["sets"] * PRIMARY
         for m in secondary:
             load[m] = load.get(m, 0) + e["sets"] * SECONDARY
+    return load
+
+
+def template_readiness(template_exercises, recovery_rows):
+    """How ready you are for a template: recovery of the muscles it loads, weighted by planned sets."""
+    pct = {r["muscle"]: r["recovery_pct"] for r in recovery_rows}
+    load = template_loads(template_exercises)
     total = sum(load.values())
     if not total:
         return {"readiness": 100, "limiting_muscle": None}

@@ -108,6 +108,42 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     var id: Int { sessionId }
 }
 
+struct GeneratedExercise: Codable, Identifiable, Hashable {
+    var exercise: String
+    var sets: Int
+    var reps: Int
+    var weightKg: Double
+    var restSeconds: Int
+    var reason: String
+    var muscles: [String]
+    var compound: Bool
+    var warmup: String?
+    var id: String { exercise }
+}
+
+struct GeneratedWorkout: Codable, Hashable {
+    var name: String
+    var goal: String
+    var minutes: Int
+    var estimatedMinutes: Int
+    var equipmentProfile: String
+    var targets: [String: Int]      // muscle -> % recovered
+    var exercises: [GeneratedExercise]
+}
+
+struct EquipmentProfile: Codable, Identifiable, Hashable {
+    var id: Int
+    var name: String
+    var equipment: [String]
+}
+
+struct Alternative: Codable, Identifiable, Hashable {
+    var exercise: String
+    var equipment: [String]
+    var sessions: Int
+    var id: String { exercise }
+}
+
 func parseISO(_ s: String) -> Date? { ISO8601DateFormatter().date(from: s) }
 
 func shortDate(_ iso: String) -> String {

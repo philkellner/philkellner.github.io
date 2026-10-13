@@ -8,6 +8,8 @@ struct SessionView: View {
     @State private var warmup = false
     @State private var restEnd: Date?
     @State private var error: String?
+    @State private var swapFrom: String?
+    @State private var alternatives: [Alternative] = []
 
     private var key: String {
         guard let n = session.next else { return "" }
@@ -40,7 +42,16 @@ struct SessionView: View {
                         logControls(n.exercise, setIndex: n.setIndex)
                     }
                 } header: {
-                    Text(e.exercise)
+                    HStack {
+                        Text(e.exercise)
+                        Spacer()
+                        if session.finishedAt == nil && session.workingSets(of: e.exercise).isEmpty && session.completedSets.filter({ $0.exercise == e.exercise }).isEmpty {
+                            Button { Task { await loadAlternatives(for: e.exercise) } } label: {
+                                Label("Swap", systemImage: "arrow.triangle.2.circlepath")
+                            }
+                            .font(.caption)
+                        }
+                    }
                 } footer: {
                     VStack(alignment: .leading) {
                         if let sug = e.suggestion { Text("Suggested: \(sug.reps) × \(Units.text(sug.weightKg)). \(sug.reason)") }
@@ -58,6 +69,14 @@ struct SessionView: View {
             }
         }
         .navigationTitle(session.name)
+        .confirmationDialog("Swap \(swapFrom ?? "")", isPresented: Binding(get: { swapFrom != nil }, set: { if !$0 { swapFrom = nil } }),
+                            titleVisibility: .visible) {
+            ForEach(alternatives) { a in
+                Button("\(a.exercise) (\(a.equipment.joined(separator: ", ")))") { Task { await swap(to: a.exercise) } }
+            }
+        } message: {
+            if alternatives.isEmpty { Text("No alternatives for your equipment.") }
+        }
         .onAppear(perform: loadSuggestion)
         .onChange(of: key) { _, _ in loadSuggestion() }
     }
@@ -89,6 +108,20 @@ struct SessionView: View {
             RestAlert.schedule(after: e.restSeconds, next: session.next?.exercise.exercise ?? "")
         }
         warmup = false
+    }
+
+    func loadAlternatives(for exercise: String) async {
+        guard let c = APIConfig.load() else { return }
+        do {
+            alternatives = try await APIClient(config: c).alternatives(for: exercise)
+            swapFrom = exercise
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func swap(to replacement: String) async {
+        guard let from = swapFrom else { return }
+        swapFrom = nil
+        await run { try await $0.swap(sessionId: session.id, exercise: from, replacement: replacement) }
     }
 
     func delete(_ s: CompletedSet) async {

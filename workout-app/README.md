@@ -10,7 +10,7 @@ export API_TOKEN=$(openssl rand -hex 24)      # keep this; the apps and bot send
 python seed.py ../../workout-coach/profile.json   # loads Chest & Triceps / Back & Biceps / Shoulders / Legs
 python import_history.py ~/Downloads/WorkoutExport.csv   # optional: your past workouts (safe to re-run)
 uvicorn app:app --host 0.0.0.0 --port 8000
-pytest                                          # 25 tests
+pytest                                          # 38 tests
 ```
 Deploy it anywhere with HTTPS (Fly.io, Railway, a VPS behind Caddy). Set `DB_PATH` to a persistent volume.
 
@@ -35,5 +35,12 @@ miss: repeat; miss twice: deload ~10%; 4+ weeks off: restart at 90%, 8+ weeks at
 exercise keeps the template's numbers; `GET /exercises/{name}/suggestion` shows the current suggestion.
 Recovery: `GET /recovery` (per-muscle %) and `GET /recommendation` (templates ranked by readiness) use `muscles.py`
 (exercise to muscle map) and `recovery.py` (fatigue model); both take `?as_of=<ISO time>` to look ahead.
-Not yet: HealthKit/heart rate, workout generation, swaps.
+Generator: `POST /generate {minutes, goal: strength|hypertrophy|endurance, profile, template | muscles, variety 0..1, exclude, seed}`
+returns a draft (nothing saved); `POST /sessions/custom` starts it. With no `template`/`muscles` it picks your most recovered
+day and drops muscles that are still sore. Exercises come from your history (done 2+ times) plus a small built-in library,
+filtered by an equipment profile. `POST /equipment-profiles/derive` builds "From my history" and "Recent training" from what
+you've logged (`import_history.py` does this for you); the former is the default. Weights are your last estimated 1RM at ~2 reps
+in reserve (80-90% after a layoff); new exercises start at 0 with a note to find a light weight.
+Swaps: `GET /exercises/{name}/alternatives`, `POST /sessions/{id}/swap` (only before sets are logged for that exercise).
+Not yet: HealthKit/heart rate.
 Units: server stores kg; phone Settings switches display between lb and kg (default lb) and syncs to the Watch.

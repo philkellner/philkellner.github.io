@@ -27,6 +27,7 @@ struct WorkoutsTab: View {
     @State private var active: WorkoutSession?
     @State private var readiness: [TemplateReadiness] = []
     @State private var error: String?
+    @State private var showGenerate = false
 
     var body: some View {
         NavigationStack {
@@ -68,7 +69,11 @@ struct WorkoutsTab: View {
                 }
             }
             .navigationTitle("Workouts")
-            .toolbar { Button("Settings") { showSettings = true } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Generate") { showGenerate = true } }
+                ToolbarItem(placement: .topBarTrailing) { Button("Settings") { showSettings = true } }
+            }
+            .sheet(isPresented: $showGenerate) { GenerateView { s in active = s } }
             .refreshable { await load() }
             .task(id: config) { await load() }
         }

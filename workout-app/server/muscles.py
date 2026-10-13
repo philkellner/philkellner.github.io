@@ -52,6 +52,18 @@ EXERCISES = {
     "Hanging Knee Raise": _CORE, "Flutter Kicks": _CORE, "Plank": _CORE, "Dumbbell Side Bend": _CORE,
 }
 
+# Common exercises you haven't logged yet; they give the generator and swaps something to offer beyond your history.
+EXERCISES.update({
+    "Pull Up": _ROW, "Chin Up": _ROW, "Romanian Deadlift": (["hamstrings", "glutes"], ["back"]),
+    "Dumbbell Romanian Deadlift": (["hamstrings", "glutes"], ["back"]), "Bulgarian Split Squat": _LUNGE,
+    "Hack Squat": _SQUAT, "Barbell Hip Thrust": _HIP, "Glute Bridge": _HIP, "Seated Calf Raise": _CALF,
+    "Chest Press Machine": _PRESS, "Close Grip Bench Press": (["triceps"], ["chest", "shoulders"]),
+    "Overhead Triceps Extension": _TRI, "Cable Lateral Raise": _DELT, "Cable Rear Delt Fly": _DELT,
+    "Reverse Pec Deck": _DELT, "Preacher Curl": _CURL, "Cable Curl": _CURL, "Incline Dumbbell Curl": _CURL,
+    "T-Bar Row": _ROW, "Dumbbell Pullover": (["back"], ["chest"]), "Dumbbell Goblet Squat": _SQUAT,
+    "Cable Crunch": _CORE, "Pallof Press": _CORE, "Dead Bug": _CORE,
+})
+
 # Checked in order for names not listed above; first match wins.
 KEYWORDS = [
     (("shoulder raise", "shoulder squeeze"), _DELT), (("clam", "lateral walk"), _HIP), (("superman",), (["back"], [])),

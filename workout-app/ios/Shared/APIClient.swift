@@ -87,6 +87,37 @@ struct APIClient {
         try decode([WorkoutSession].self, try await request("GET", "/sessions?limit=\(limit)"))
     }
 
+    func profiles() async throws -> [EquipmentProfile] {
+        try decode([EquipmentProfile].self, try await request("GET", "/equipment-profiles"))
+    }
+
+    func generate(minutes: Int = 45, goal: String = "hypertrophy", profile: String? = nil, template: String? = nil,
+                  variety: Double = 0.2, seed: Int? = nil) async throws -> GeneratedWorkout {
+        var body: [String: Any] = ["minutes": minutes, "goal": goal, "variety": variety]
+        if let profile, !profile.isEmpty { body["profile"] = profile }
+        if let template, !template.isEmpty { body["template"] = template }
+        if let seed { body["seed"] = seed }
+        return try decode(GeneratedWorkout.self, try await request("POST", "/generate", body: body))
+    }
+
+    func startCustom(_ w: GeneratedWorkout, source: String) async throws -> WorkoutSession {
+        let exercises = w.exercises.map { e -> [String: Any] in
+            ["exercise": e.exercise, "sets": e.sets, "reps": e.reps, "weight_kg": e.weightKg, "rest_seconds": e.restSeconds]
+        }
+        return try decode(WorkoutSession.self, try await request("POST", "/sessions/custom",
+                          body: ["name": w.name, "source": source, "exercises": exercises]))
+    }
+
+    func alternatives(for exercise: String) async throws -> [Alternative] {
+        let name = exercise.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? exercise
+        return try decode([Alternative].self, try await request("GET", "/exercises/\(name)/alternatives"))
+    }
+
+    func swap(sessionId: Int, exercise: String, replacement: String) async throws -> WorkoutSession {
+        try decode(WorkoutSession.self, try await request("POST", "/sessions/\(sessionId)/swap",
+                   body: ["exercise": exercise, "replacement": replacement]))
+    }
+
     func recovery() async throws -> [MuscleRecovery] {
         try decode([MuscleRecovery].self, try await request("GET", "/recovery"))
     }

@@ -76,6 +76,7 @@ def import_days(days):
                 con.execute("INSERT INTO session_exercises (session_id,position,exercise,sets,reps,weight_kg) VALUES (?,?,?,?,?,?)",
                             (sid, pos, ex, len(work), int(statistics.median(w["reps"] for w in work)), max(w["kg"] for w in work)))
             added += 1
+        app.derive_profiles(con)   # equipment profiles that match what you actually train with
     return added, skipped
 
 
