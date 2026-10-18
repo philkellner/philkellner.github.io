@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reddit Reader</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --fg:#1c1c1c; --muted:#6b7280; --accent:#ff4500; --line:#e5e7eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0e1113; --card:#181c1f; --fg:#e8eaed; --muted:#9aa0a6; --line:#2a2f33; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  a { color:var(--accent); text-decoration:none; }
+  header { position:sticky; top:0; z-index:5; background:var(--card); border-bottom:1px solid var(--line);
+           display:flex; gap:8px; padding:10px 16px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0 8px 0 0; color:var(--accent); cursor:pointer; }
+  input, select, button { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:6px;
+                          background:var(--bg); color:var(--fg); }
+  button { cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  .post { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:12px; }
+  .post h2 { font-size:17px; margin:4px 0; }
+  .post h2 a { color:var(--fg); }
+  .meta { color:var(--muted); font-size:13px; }
+  .thumb { max-width:100%; max-height:420px; border-radius:6px; margin-top:8px; display:block; }
+  .flair { background:var(--line); border-radius:10px; padding:0 8px; font-size:12px; margin-left:4px; }
+  .comment { border-left:2px solid var(--line); padding-left:12px; margin:10px 0 0 0; }
+  .comment .body p { margin:4px 0; }
+  .comment details > summary { cursor:pointer; color:var(--muted); font-size:13px; }
+  .selftext { white-space:pre-wrap; word-break:break-word; margin-top:6px; }
+  .status { text-align:center; color:var(--muted); padding:24px; }
+  .error { color:#b91c1c; }
+  .actions { margin-top:8px; font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="home">Reddit Reader</h1>
+  <form id="form" style="display:contents">
+    <input id="sub" placeholder="subreddit (e.g. programming)" size="22" list="favs">
+    <datalist id="favs"></datalist>
+    <select id="sort"><option>hot</option><option>new</option><option>top</option><option>rising</option></select>
+    <select id="time" hidden>
+      <option>day</option><option>week</option><option>month</option><option>year</option><option>all</option>
+    </select>
+    <button class="primary">Go</button>
+  </form>
+  <input id="q" placeholder="search…" size="14">
+</header>
+<main id="app"></main>
+
+<script>
+const app = document.getElementById('app');
+const $ = id => document.getElementById(id);
+const DEFAULT_SUBS = ['all','popular','programming','worldnews','science','technology','AskReddit'];
+$('favs').innerHTML = DEFAULT_SUBS.map(s => `<option value="${s}">`).join('');
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const decode = s => { const t = document.createElement('textarea'); t.innerHTML = s; return t.value; };
+const ago = ts => {
+  const s = Date.now()/1000 - ts;
+  for (const [n,u] of [[31536000,'y'],[2592000,'mo'],[86400,'d'],[3600,'h'],[60,'m']])
+    if (s >= n) return Math.floor(s/n)+u+' ago';
+  return 'just now';
+};
+const num = n => n >= 1000 ? (n/1000).toFixed(1)+'k' : n;
+
+// Minimal safe markdown: escape first, then links, bold, italic, code, quotes.
+function md(text) {
+  let h = esc(text);
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>')
+       .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+       .replace(/\*([^*\n]+)\*/g, '<i>$1</i>')
+       .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+       .replace(/(^|[\s>])(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>')
+       .replace(/^&gt; ?(.*)$/gm, '<blockquote style="margin:4px 0;padding-left:8px;border-left:3px solid var(--line)">$1</blockquote>');
+  return h.split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g,'<br>')}</p>`).join('');
+}
+
+// Reddit's JSON is often CORS-blocked from browsers, so fall back to proxies.
+const PROXIES = [
+  u => u,
+  u => 'https://corsproxy.io/?' + encodeURIComponent(u),
+  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+];
+async function redditJSON(path) {
+  const url = 'https://www.reddit.com' + path + (path.includes('?') ? '&' : '?') + 'raw_json=1';
+  let lastErr;
+  for (const p of PROXIES) {
+    try {
+      const r = await fetch(p(url));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
+// ---- routing via hash: #/r/name/sort?t=day | #/comments/id | #/search/query
+function go(hash) { location.hash = hash; }
+$('home').onclick = () => go('#/r/popular/hot');
+$('sort').onchange = () => { $('time').hidden = $('sort').value !== 'top'; };
+$('form').onsubmit = e => {
+  e.preventDefault();
+  const sub = $('sub').value.trim().replace(/^\/?r\//i,'') || 'popular';
+  const t = $('sort').value === 'top' ? '?t=' + $('time').value : '';
+  go(`#/r/${encodeURIComponent(sub)}/${$('sort').value}${t}`);
+};
+$('q').onkeydown = e => { if (e.key === 'Enter' && $('q').value.trim()) go('#/search/' + encodeURIComponent($('q').value.trim())); };
+window.onhashchange = route;
+
+async function route() {
+  const [path, query] = (location.hash || '#/r/popular/hot').slice(1).split('?');
+  const parts = path.split('/').filter(Boolean);
+  app.innerHTML = '<div class="status">Loading…</div>';
+  window.scrollTo(0,0);
+  try {
+    if (parts[0] === 'comments') return await showThread(parts[1]);
+    if (parts[0] === 'search') return await showListing(`/search.json?q=${parts[1]}`, 'Search: ' + decodeURIComponent(parts[1]));
+    const sub = parts[1] || 'popular', sort = parts[2] || 'hot';
+    $('sub').value = sub; $('sort').value = sort;
+    $('time').hidden = sort !== 'top';
+    await showListing(`/r/${sub}/${sort}.json?limit=25${query ? '&' + query : ''}`, 'r/' + decodeURIComponent(sub));
+  } catch (e) {
+    app.innerHTML = `<div class="status error">Couldn't load from Reddit (${esc(e.message)}). Try again in a moment.</div>`;
+  }
+}
+
+function postHTML(p, full) {
+  const img = /\.(jpe?g|png|gif|webp)$/i.test(p.url) ? p.url
+    : (p.preview?.images?.[0]?.source?.url) || '';
+  const link = full ? `#/comments/${p.id}` : `#/comments/${p.id}`;
+  return `<article class="post">
+    <div class="meta"><a href="#/r/${p.subreddit}/hot">r/${esc(p.subreddit)}</a> · u/${esc(p.author)} · ${ago(p.created_utc)}
+      ${p.over_18 ? '<span class="flair">NSFW</span>' : ''}
+      ${p.link_flair_text ? `<span class="flair">${esc(p.link_flair_text)}</span>` : ''}</div>
+    <h2><a href="${link}">${esc(decode(p.title))}</a></h2>
+    ${!p.is_self && !p.is_video ? `<div class="meta"><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.domain)} ↗</a></div>` : ''}
+    ${img && !p.over_18 ? `<img class="thumb" loading="lazy" src="${esc(img)}" alt="">` : ''}
+    ${p.is_video && p.media?.reddit_video ? `<video class="thumb" controls src="${esc(p.media.reddit_video.fallback_url)}"></video>` : ''}
+    ${full && p.selftext ? `<div class="selftext">${md(p.selftext)}</div>` : ''}
+    <div class="actions meta">▲ ${num(p.score)} · <a href="${link}">💬 ${num(p.num_comments)} comments</a>
+      · <a href="https://www.reddit.com${esc(p.permalink)}" target="_blank" rel="noopener noreferrer">open on reddit</a></div>
+  </article>`;
+}
+
+async function showListing(path, title) {
+  const data = await redditJSON(path);
+  const posts = data.data.children.map(c => c.data);
+  app.innerHTML = `<h3 style="margin-top:0">${esc(title)}</h3>` +
+    (posts.map(p => postHTML(p)).join('') || '<div class="status">Nothing here.</div>');
+  if (data.data.after) showMore(path, data.data.after);
+}
+function showMore(path, after) {
+  const b = document.createElement('button');
+  b.textContent = 'Load more'; b.style.cssText = 'display:block;margin:12px auto';
+  b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Loading…';
+    const d = await redditJSON(path + (path.includes('?') ? '&' : '?') + 'after=' + after);
+    b.insertAdjacentHTML('beforebegin', d.data.children.map(c => postHTML(c.data)).join(''));
+    b.remove();
+    if (d.data.after) showMore(path, d.data.after);
+  };
+  app.appendChild(b);
+}
+
+function commentHTML(c) {
+  if (c.kind !== 't1') return '';
+  const d = c.data;
+  const replies = d.replies?.data?.children?.map(commentHTML).join('') || '';
+  return `<div class="comment"><details open><summary>u/${esc(d.author)} · ▲ ${num(d.score)} · ${ago(d.created_utc)}</summary>
+    <div class="body">${md(d.body)}</div>${replies}</details></div>`;
+}
+
+async function showThread(id) {
+  const [postL, comL] = await redditJSON(`/comments/${id}.json?limit=200`);
+  const p = postL.data.children[0].data;
+  app.innerHTML = `<a href="javascript:history.back()">← back</a><div style="height:8px"></div>` + postHTML(p, true) +
+    `<h3>${num(p.num_comments)} comments</h3>` + comL.data.children.map(commentHTML).join('');
+}
+
+route();
+</script>
+</body>
+</html>
