@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drum Trainer</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --fg:#1c1c1c; --muted:#6b7280; --accent:#e11d48; --line:#e5e7eb;
+          --hihat:#f59e0b; --snare:#3b82f6; --kick:#10b981; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0e1113; --card:#181c1f; --fg:#e8eaed; --muted:#9aa0a6; --line:#2a2f33; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:10px 16px; display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; color:var(--accent); }
+  #title { color:var(--muted); }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:12px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  label { font-size:13px; color:var(--muted); display:flex; flex-direction:column; gap:2px; }
+  label.inline { flex-direction:row; align-items:center; gap:6px; }
+  input, select, button { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  input[type=range] { padding:0; }
+  button { cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  #stage { position:relative; width:100%; touch-action:manipulation; }
+  canvas { width:100%; height:62vh; min-height:360px; display:block; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  .pads { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:8px; }
+  .pad { padding:18px 0; font-weight:600; border-radius:8px; color:#fff; border:0; user-select:none; touch-action:manipulation; }
+  .pad small { display:block; font-weight:400; opacity:.85; }
+  .stats { display:flex; gap:18px; flex-wrap:wrap; font-variant-numeric:tabular-nums; }
+  .stats b { font-size:20px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .hint { color:var(--muted); font-size:13px; margin:6px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Drum Trainer</h1><span id="title">load a chart to start</span>
+</header>
+<main>
+  <div class="card" id="loader">
+    <div class="row">
+      <label>Chart (chart.json) <input type="file" id="chartFile" accept=".json,application/json"></label>
+      <label>Audio to play along with (backing.wav or full song) <input type="file" id="audioFile" accept="audio/*"></label>
+    </div>
+    <p class="hint">Files stay in your browser; nothing is uploaded. Make a chart with <code>tools/drumchart/drumchart.py</code> (see the README there).</p>
+  </div>
+
+  <div class="card row">
+    <button class="primary" id="play" disabled>Start</button>
+    <button id="stop" disabled>Stop</button>
+    <label>Speed <span id="speedV">100%</span><input type="range" id="speed" min="40" max="120" value="100" step="5"></label>
+    <label>Loop from (s)<input type="number" id="loopA" step="0.1" min="0" style="width:80px"></label>
+    <label>to (s)<input type="number" id="loopB" step="0.1" min="0" style="width:80px"></label>
+    <button id="setA" title="use current position">Set A</button>
+    <button id="setB">Set B</button>
+    <button id="clearLoop">Clear</button>
+  </div>
+  <div class="card row">
+    <label class="inline"><input type="checkbox" id="click" checked> Metronome</label>
+    <label class="inline"><input type="checkbox" id="hear"> Hear the chart (listen mode)</label>
+    <label class="inline"><input type="checkbox" id="sfx" checked> Hit sounds</label>
+    <label class="inline"><input type="checkbox" id="wait"> Count-in 4 beats</label>
+    <label>Latency offset (ms)<input type="number" id="latency" value="0" step="5" style="width:80px"></label>
+  </div>
+
+  <div id="stage"><canvas id="cv"></canvas></div>
+  <div class="pads" id="pads"></div>
+
+  <div class="card stats" style="margin-top:12px">
+    <div>Accuracy<br><b id="acc">–</b></div>
+    <div>Perfect<br><b id="nP">0</b></div>
+    <div>Good<br><b id="nG">0</b></div>
+    <div>Miss<br><b id="nM">0</b></div>
+    <div>Avg timing<br><b id="avg">–</b></div>
+    <div>Best<br><b id="best">–</b></div>
+  </div>
+  <p class="hint">Keys: <b>F</b> or <b>Space</b> = kick, <b>J</b> = snare, <b>K</b> = hi-hat. MIDI drum pads/e-kits work too (Chrome/Edge). Tap the pads on a phone.
+     Practice tip: loop a hard bar, drop the speed to 60%, raise it as your accuracy passes 90%.</p>
+</main>
+
+<script>
+const COLORS = { hihat:'#f59e0b', snare:'#3b82f6', kick:'#10b981' };
+const KEYS = { KeyF:2, Space:2, KeyJ:1, KeyK:0 };
+const MIDI_LANE = { 35:2, 36:2, 37:1, 38:1, 40:1, 42:0, 44:0, 46:0, 22:0, 26:0 };
+const WIN = { perfect:0.04, good:0.08, ok:0.12 };
+const $ = id => document.getElementById(id);
+
+let chart = null, audioEl = null, ctx = null;
+let running = false, startWall = 0, startSong = 0, notes = [], flash = [0,0,0], popups = [];
+let stats, nextSchedule = 0, nextClick = 0;
+
+function ac() { return ctx || (ctx = new (window.AudioContext || window.webkitAudioContext)()); }
+
+// ---------- loading ----------
+$('chartFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  chart = JSON.parse(await f.text());
+  $('title').textContent = `${chart.title} · ${chart.bpm} BPM · ${chart.notes.length} notes`;
+  $('play').disabled = $('stop').disabled = false;
+  $('best').textContent = localStorage.getItem('best:' + chart.title) ? localStorage.getItem('best:' + chart.title) + '%' : '–';
+  buildPads(); resetRun(0); draw();
+};
+$('audioFile').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (audioEl) URL.revokeObjectURL(audioEl.src);
+  audioEl = new Audio(URL.createObjectURL(f));
+  audioEl.preservesPitch = true; audioEl.preload = 'auto';
+};
+
+function buildPads() {
+  const pads = $('pads'); pads.innerHTML = '';
+  const keyNames = ['K','J','F / Space'];
+  chart.lanes.forEach((name, i) => {
+    const b = document.createElement('button');
+    b.className = 'pad'; b.style.background = COLORS[name];
+    b.innerHTML = `${name}<small>${keyNames[i]}</small>`;
+    b.addEventListener('pointerdown', e => { e.preventDefault(); hit(i); });
+    pads.appendChild(b);
+  });
+}
+
+// ---------- clock ----------
+const speed = () => $('speed').value / 100;
+function songTime() {
+  if (!running) return startSong;
+  if (audioEl && !countIn) return audioEl.currentTime - $('latency').value / 1000;
+  return startSong + (performance.now() - startWall) / 1000 * speed() - $('latency').value / 1000;
+}
+let countIn = false;
+
+function resetRun(from) {
+  startSong = from;
+  notes = chart ? chart.notes.map(n => ({ ...n, state: null, dt: 0 })) : [];
+  stats = { perfect:0, good:0, miss:0, devs:[] };
+  nextSchedule = from; popups = []; renderStats();
+}
+
+function start() {
+  if (!chart) return;
+  ac().resume();
+  const a = parseFloat($('loopA').value), b = parseFloat($('loopB').value);
+  const from = isFinite(a) ? a : 0;
+  resetRun(from);
+  const beat = 60 / chart.bpm;
+  countIn = $('wait').checked;
+  const go = () => {
+    countIn = false;
+    if (audioEl) { audioEl.playbackRate = speed(); audioEl.currentTime = from; audioEl.play(); }
+    startWall = performance.now(); nextClick = Math.ceil((from - chart.offset) / beat); nextSchedule = from;
+  };
+  running = true;
+  if (countIn) {
+    const t0 = ac().currentTime + 0.1;
+    for (let i = 0; i < 4; i++) click(t0 + i * beat / speed(), i === 0);
+    startWall = performance.now(); startSong = from - 4 * beat; nextClick = Math.ceil((from - chart.offset) / beat);
+    setTimeout(go, (0.1 + 4 * beat / speed()) * 1000);
+  } else go();
+  $('play').textContent = 'Restart';
+  requestAnimationFrame(frame);
+}
+
+function stop(finished) {
+  running = false; countIn = false;
+  if (audioEl) audioEl.pause();
+  if (finished) finish();
+  $('play').textContent = 'Start';
+}
+
+function finish() {
+  const done = notes.filter(n => n.state);
+  const acc = accuracy();
+  if (done.length && isFinite(acc) && !isLooping()) {
+    const key = 'best:' + chart.title, prev = parseFloat(localStorage.getItem(key) || 0);
+    if (acc > prev) localStorage.setItem(key, acc.toFixed(1));
+    $('best').textContent = Math.max(acc, prev).toFixed(1) + '%';
+  }
+}
+const isLooping = () => isFinite(parseFloat($('loopA').value)) || isFinite(parseFloat($('loopB').value));
+
+// ---------- sound ----------
+function click(when, accent) {
+  const o = ac().createOscillator(), g = ac().createGain();
+  o.frequency.value = accent ? 1600 : 1000; g.gain.setValueAtTime(0.25, when); g.gain.exponentialRampToValueAtTime(0.001, when + 0.05);
+  o.connect(g).connect(ac().destination); o.start(when); o.stop(when + 0.06);
+}
+let noiseBuf;
+function noise() {
+  if (noiseBuf) return noiseBuf;
+  noiseBuf = ac().createBuffer(1, ac().sampleRate, ac().sampleRate);
+  const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return noiseBuf;
+}
+function drum(lane, when = 0) {
+  const c = ac(), t = when || c.currentTime, out = c.destination, g = c.createGain();
+  if (lane === 2) {
+    const o = c.createOscillator(); o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+    g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    o.connect(g).connect(out); o.start(t); o.stop(t + 0.3);
+  } else {
+    const s = c.createBufferSource(); s.buffer = noise(); const f = c.createBiquadFilter();
+    if (lane === 1) { f.type = 'bandpass'; f.frequency.value = 1800; g.gain.setValueAtTime(0.7, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+      const o = c.createOscillator(); o.frequency.value = 190; const og = c.createGain(); og.gain.setValueAtTime(0.4, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+      o.connect(og).connect(out); o.start(t); o.stop(t + 0.12); }
+    else { f.type = 'highpass'; f.frequency.value = 7000; g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.05); }
+    s.connect(f).connect(g).connect(out); s.start(t); s.stop(t + 0.2);
+  }
+}
+
+// ---------- input & judging ----------
+function hit(lane) {
+  flash[lane] = 1;
+  if ($('sfx').checked) drum(lane);
+  if (!running || countIn) return;
+  const t = songTime();
+  let best = null;
+  for (const n of notes) {
+    if (n.l !== lane || n.state) continue;
+    const d = t - n.t;
+    if (d < -WIN.ok) break;
+    if (Math.abs(d) <= WIN.ok && (!best || Math.abs(d) < Math.abs(best.t - t))) best = n;
+  }
+  if (!best) return;
+  const d = t - best.t, ad = Math.abs(d);
+  best.state = ad <= WIN.perfect ? 'perfect' : ad <= WIN.good ? 'good' : 'ok';
+  best.dt = d;
+  stats[best.state === 'ok' ? 'good' : best.state]++; stats.devs.push(d);
+  popups.push({ lane, text: best.state === 'perfect' ? 'Perfect' : d < 0 ? 'Early' : 'Late', born: performance.now() });
+  renderStats();
+}
+addEventListener('keydown', e => {
+  if (e.repeat || e.target.tagName === 'INPUT' && e.target.type !== 'checkbox' && e.code !== 'Space') return;
+  if (e.code in KEYS) { e.preventDefault(); if (chart) hit(KEYS[e.code]); }
+});
+if (navigator.requestMIDIAccess) navigator.requestMIDIAccess().then(m => {
+  const bind = inp => inp.onmidimessage = e => {
+    const [st, note, vel] = e.data;
+    if ((st & 0xF0) === 0x90 && vel > 0 && note in MIDI_LANE && chart) hit(MIDI_LANE[note]);
+  };
+  m.inputs.forEach(bind); m.onstatechange = () => m.inputs.forEach(bind);
+}).catch(() => {});
+
+function accuracy() {
+  const judged = notes.filter(n => n.state || n.missed);
+  if (!judged.length) return NaN;
+  const pts = judged.reduce((s, n) => s + (n.state === 'perfect' ? 1 : n.state ? 0.7 : 0), 0);
+  return 100 * pts / judged.length;
+}
+function renderStats() {
+  const a = accuracy();
+  $('acc').textContent = isFinite(a) ? a.toFixed(1) + '%' : '–';
+  $('nP').textContent = stats.perfect; $('nG').textContent = stats.good;
+  $('nM').textContent = notes.filter(n => n.missed).length;
+  const m = stats.devs.length ? stats.devs.reduce((s, d) => s + d, 0) / stats.devs.length * 1000 : null;
+  $('avg').textContent = m === null ? '–' : `${Math.abs(m).toFixed(0)}ms ${m < -5 ? 'early' : m > 5 ? 'late' : 'on time'}`;
+}
+
+// ---------- main loop ----------
+function frame() {
+  if (!running) { draw(); return; }
+  const t = songTime(), sp = speed();
+  const b = parseFloat($('loopB').value);
+  // mark misses
+  let changed = false;
+  for (const n of notes) { if (n.t > t - WIN.ok) break; if (!n.state && !n.missed) { n.missed = true; changed = true; } }
+  if (changed) renderStats();
+  // listen mode + metronome, scheduled slightly ahead for steady timing
+  if (!countIn) {
+    const ahead = t + 0.12 * sp;
+    if ($('hear').checked) for (const n of notes) {
+      if (n.t < nextSchedule) continue; if (n.t >= ahead) break;
+      drum(n.l, ac().currentTime + Math.max(0, (n.t - t) / sp)); nextSchedule = n.t + 1e-6;
+    } else nextSchedule = ahead;
+    const beat = 60 / chart.bpm;
+    while (chart.offset + nextClick * beat < ahead) {
+      const bt = chart.offset + nextClick * beat;
+      if ($('click').checked && bt >= t - 0.01) click(ac().currentTime + Math.max(0, (bt - t) / sp), nextClick % 4 === 0);
+      nextClick++;
+    }
+  }
+  if (isFinite(b) && t >= b) { // loop
+    const a = parseFloat($('loopA').value) || 0;
+    stop(false); finish(); setTimeout(() => start(), 50); return;
+  }
+  const end = chart.duration || Infinity;
+  if (t > end + 0.5 || (audioEl && audioEl.ended)) { stop(true); draw(); return; }
+  draw(); requestAnimationFrame(frame);
+}
+
+// ---------- drawing ----------
+const cv = $('cv'), g2 = cv.getContext('2d');
+function draw() {
+  const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== w * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
+  g2.setTransform(dpr, 0, 0, dpr, 0, 0); g2.clearRect(0, 0, w, h);
+  const css = getComputedStyle(document.documentElement);
+  const fg = css.getPropertyValue('--fg'), line = css.getPropertyValue('--line'), muted = css.getPropertyValue('--muted');
+  if (!chart) { g2.fillStyle = muted; g2.textAlign = 'center'; g2.fillText('Load chart.json to begin', w / 2, h / 2); return; }
+  const lanes = chart.lanes.length, lw = w / lanes, hitY = h - 70, t = songTime(), sp = speed();
+  const look = 1.8 * sp, pps = hitY / look;
+  // lanes, beat lines
+  for (let i = 0; i < lanes; i++) {
+    g2.fillStyle = COLORS[chart.lanes[i]] + (flash[i] > 0 ? '33' : '12');
+    g2.fillRect(i * lw, 0, lw, h); flash[i] = Math.max(0, flash[i] - 0.1);
+  }
+  const beat = 60 / chart.bpm;
+  g2.strokeStyle = line; g2.lineWidth = 1;
+  for (let k = Math.ceil((t - chart.offset) / beat); chart.offset + k * beat < t + look; k++) {
+    const y = hitY - (chart.offset + k * beat - t) * pps; g2.globalAlpha = k % 4 === 0 ? 1 : 0.4;
+    g2.beginPath(); g2.moveTo(0, y); g2.lineTo(w, y); g2.stroke();
+  }
+  g2.globalAlpha = 1;
+  // notes
+  for (const n of notes) {
+    const y = hitY - (n.t - t) * pps;
+    if (y < -20) break; if (y > h + 20) continue;
+    if (n.state) continue;
+    g2.globalAlpha = n.missed ? 0.25 : 1;
+    g2.fillStyle = COLORS[chart.lanes[n.l]];
+    const nh = n.l === 2 ? 22 : 16;
+    g2.beginPath(); g2.roundRect(n.l * lw + lw * 0.12, y - nh / 2, lw * 0.76, nh, 6); g2.fill();
+  }
+  g2.globalAlpha = 1;
+  // hit line + labels
+  g2.strokeStyle = fg; g2.lineWidth = 3; g2.beginPath(); g2.moveTo(0, hitY); g2.lineTo(w, hitY); g2.stroke();
+  g2.font = '600 14px system-ui'; g2.textAlign = 'center'; g2.fillStyle = fg;
+  chart.lanes.forEach((nm, i) => g2.fillText(nm, i * lw + lw / 2, hitY + 28));
+  // popups
+  const now = performance.now(); popups = popups.filter(p => now - p.born < 600);
+  g2.font = '700 16px system-ui';
+  for (const p of popups) { g2.globalAlpha = 1 - (now - p.born) / 600; g2.fillStyle = fg; g2.fillText(p.text, p.lane * lw + lw / 2, hitY - 20 - (now - p.born) / 20); }
+  g2.globalAlpha = 1;
+  // progress
+  if (chart.duration) { g2.fillStyle = muted; g2.fillRect(0, 0, w * Math.min(1, Math.max(0, t / chart.duration)), 3); }
+}
+addEventListener('resize', draw);
+
+// ---------- controls ----------
+$('play').onclick = start;
+$('stop').onclick = () => { stop(false); draw(); };
+$('speed').oninput = () => { $('speedV').textContent = $('speed').value + '%'; if (audioEl) audioEl.playbackRate = speed(); };
+$('setA').onclick = () => { $('loopA').value = Math.max(0, songTime()).toFixed(1); };
+$('setB').onclick = () => { $('loopB').value = Math.max(0, songTime()).toFixed(1); };
+$('clearLoop').onclick = () => { $('loopA').value = $('loopB').value = ''; };
+</script>
+</body>
+</html>
